@@ -1,0 +1,39 @@
+name: neotexai-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg18
+    container_name: neotex-postgres
+    environment:
+      POSTGRES_USER: neotex
+      POSTGRES_PASSWORD: neotex
+      POSTGRES_DB: neotex
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neotex -d neotex"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: neotex-rustfs
+    ports:
+      - "9000:9000"
+    environment:
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+    volumes:
+      - rustfs_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  rustfs_data:

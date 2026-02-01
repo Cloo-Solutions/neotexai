@@ -1,0 +1,14 @@
+.git
+.gitignore
+.github
+.env
+.env.*
+*.md
+!README.md
+bin/
+tmp/
+logs/
+.sisyphus/
+.oh-my-opencode-ref/
+neotex
+neotexd

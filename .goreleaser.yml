@@ -1,0 +1,120 @@
+# GoReleaser configuration for NeotexAI
+# https://goreleaser.com
+
+version: 2
+
+before:
+  hooks:
+    # Ensure dependencies are up to date
+    - go mod tidy
+
+builds:
+  # neotex - Client CLI
+  - id: neotex
+    main: ./cmd/neotex
+    binary: neotex
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Exclude darwin/amd64 as per user feedback
+    ignore:
+      - goos: darwin
+        goarch: amd64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+
+  # neotexd - Server and Admin CLI
+  - id: neotexd
+    main: ./cmd/neotexd
+    binary: neotexd
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Exclude darwin/amd64 as per user feedback
+    ignore:
+      - goos: darwin
+        goarch: amd64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    formats:
+      - tar.gz
+      - zip
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - 'typo'
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Performance Improvements
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: cloo-solutions
+    name: neotexai
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## NeotexAI {{ .Tag }}
+
+    Agent-first knowledge management for AI agents.
+
+    ### Quick Install
+
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/cloo-solutions/neotexai/main/scripts/install.sh | sh
+    ```
+
+    Or download binaries below.
+
+  footer: |
+    **Full Changelog**: https://github.com/cloo-solutions/neotexai/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+# Disable features not needed for initial release
+# Docker, Homebrew, and package managers will be added in future releases

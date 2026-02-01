@@ -1,0 +1,53 @@
+name: npm Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 0.1.0)'
+        required: true
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/skill
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      
+      - name: Update version from tag
+        if: github.event_name == 'push'
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "Publishing version: $VERSION"
+          npm version $VERSION --no-git-tag-version
+      
+      - name: Update version from input
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          echo "Publishing version: $VERSION"
+          npm version $VERSION --no-git-tag-version
+      
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      
+      - name: Output published version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Successfully published @cloo-solutions/neotexai@$VERSION"

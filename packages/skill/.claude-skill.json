@@ -1,7 +1,0 @@
-{
-  "name": "neotex",
-  "version": "0.1.0",
-  "description": "Agent-first knowledge management for Claude Code",
-  "installPath": "~/.claude/skills/neotex",
-  "files": ["SKILL.md"]
-}

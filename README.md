@@ -29,6 +29,13 @@ go install github.com/cloo-solutions/neotexai/cmd/neotex@latest
 **Download binary:**
 See [Releases](https://github.com/cloo-solutions/neotexai/releases)
 
+## Claude Code Skills
+
+```bash
+npx skills add https://github.com/cloo-solutions/neotexai/tree/main/skills/neotex
+npx skills add https://github.com/cloo-solutions/neotexai/tree/main/skills/neotex-init
+```
+
 ## Server Setup (Docker)
 
 ```bash
@@ -67,6 +74,7 @@ neotex get <id>
 | `NEOTEX_OPENAI_API_KEY` | Yes | OpenAI API key for embeddings |
 | `NEOTEX_S3_ENDPOINT` | No | S3-compatible storage endpoint |
 | `NEOTEX_S3_BUCKET` | No | Bucket name for assets |
+| `SENTRY_DSN` | No | Sentry DSN for error tracking |
 
 ### Client (`neotex`)
 

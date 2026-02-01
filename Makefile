@@ -1,4 +1,4 @@
-.PHONY: help build test lint migrate-up migrate-down sync-skill
+.PHONY: help build test lint migrate-up migrate-down
 
 help:
 	@echo "Available targets:"
@@ -7,14 +7,8 @@ help:
 	@echo "  make lint         - Run linters"
 	@echo "  make migrate-up   - Run database migrations up"
 	@echo "  make migrate-down - Run database migrations down"
-	@echo "  make sync-skill   - Sync SKILL.md from packages/skill to CLI embed"
 
-sync-skill:
-	@echo "Syncing skills..."
-	cp packages/skill/SKILL.md internal/cli/client/skill_embed.md
-	cp packages/skill/neotex-init.md internal/cli/client/skill_init_embed.md
-
-build: sync-skill
+build:
 	@echo "Building neotex and neotexd..."
 	go build -o bin/neotex ./cmd/neotex
 	go build -o bin/neotexd ./cmd/neotexd

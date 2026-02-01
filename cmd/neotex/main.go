@@ -36,7 +36,6 @@ Environment variables:
 	rootCmd.AddCommand(client.DeleteCmd())
 	rootCmd.AddCommand(client.AssetCmd())
 	rootCmd.AddCommand(client.EvalCmd())
-	rootCmd.AddCommand(client.SkillCmd())
 	rootCmd.AddCommand(client.AuthCmd())
 
 	cli.CheckHelpJSON(rootCmd)

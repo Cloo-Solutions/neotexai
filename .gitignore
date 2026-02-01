@@ -48,7 +48,6 @@ logs/
 tmp/
 temp/
 
-.oh-my-opencode-ref/
-# Binaries
-neotex
-neotexd
+# Binaries (root level only)
+/neotex
+/neotexd

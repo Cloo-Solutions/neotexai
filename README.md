@@ -1,6 +1,6 @@
 # NeotexAI
 
-Agent-first knowledge management for AI agents.
+Share organizational knowledge across your team's AI agents.
 
 [![License](https://img.shields.io/badge/license-OSAASy-blue)](LICENSE)
 [![Build](https://github.com/cloo-solutions/neotexai/actions/workflows/release.yml/badge.svg)](https://github.com/cloo-solutions/neotexai/actions/workflows/release.yml)
@@ -8,11 +8,12 @@ Agent-first knowledge management for AI agents.
 
 ## What is NeotexAI?
 
-NeotexAI is a knowledge management system designed for AI agents:
-- **Semantic search** over organizational knowledge
-- **Immutable versioning** for all content
-- **Asset management** with S3-compatible storage
-- **Multi-tenant** organization support
+NeotexAI lets teams collaborate on organizational knowledge that AI agents can access. When one team member documents a convention, decision, or pattern, everyone's AI agents can find and use it.
+
+- **Team knowledge sharing** - Guidelines, decisions, and patterns sync across your organization
+- **AI-native search** - Agents find relevant context through semantic search
+- **Assets included** - Share reference images, mockups, and files alongside documentation
+- **Version history** - Track how knowledge evolves over time
 
 ## Install (Client CLI)
 

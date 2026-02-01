@@ -50,11 +50,14 @@ func runInit(projectName, apiKey, apiURL string, outputJSON bool) error {
 		return fmt.Errorf(".neotex directory already exists")
 	}
 
+	// Use credential cascade: flag -> env -> global config
 	_ = godotenv.Load()
-	if apiKey == "" {
-		apiKey = os.Getenv(envAPIKey)
-	}
-	if apiKey == "" {
+	source, configKey, configURL := GetCredentialSource(apiKey, apiURL)
+	if source != SourceNone {
+		apiKey = configKey
+		apiURL = configURL
+	} else {
+		// No credentials found anywhere, prompt for API key
 		fmt.Print("Enter API key: ")
 		reader := bufio.NewReader(os.Stdin)
 		input, err := reader.ReadString('\n')
@@ -65,12 +68,6 @@ func runInit(projectName, apiKey, apiURL string, outputJSON bool) error {
 		if apiKey == "" {
 			return fmt.Errorf("API key is required")
 		}
-	}
-
-	if apiURL == "" {
-		apiURL = os.Getenv(envAPIURL)
-	}
-	if apiURL == "" {
 		apiURL = defaultAPIURL
 	}
 

@@ -37,6 +37,7 @@ Environment variables:
 	rootCmd.AddCommand(client.AssetCmd())
 	rootCmd.AddCommand(client.EvalCmd())
 	rootCmd.AddCommand(client.AuthCmd())
+	rootCmd.AddCommand(client.ContextCmd())
 
 	cli.CheckHelpJSON(rootCmd)
 	if err := rootCmd.Execute(); err != nil {

@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-02-02
+
+### Added
+
+- Virtual filesystem (VFS) tools for MCP-compatible agent retrieval
+- `POST /context/open` endpoint for content retrieval with line range and char limit support
+- `POST /context/list` endpoint for metadata-only listing with filters
+- `neotex context open <id>` CLI command with `--chunk`, `--lines`, `--max-chars` flags
+- `neotex context list` CLI command with `--path`, `--type`, `--source`, `--since` filters
+- Search results now include `chunk_id` and `chunk_index` for precise chunk retrieval
+- Asset open supports `--include-url` flag for presigned download URLs
+- 47 new unit tests for VFS functionality
+- E2E tests for context/open and context/list endpoints
+
+### Fixed
+
+- Sort stability bug in relevance ranking that caused flaky test results (~10% failure rate)
+- Added deterministic tiebreaker (ID-based) to `rankByRelevance` function
+
+### Changed
+
+- Search hybrid aggregation now preserves best-matching chunk identity
+- CLI search output shows chunk info when available
+
 ## [1.2.0] - 2026-02-02
 
 ### Added
@@ -53,6 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker image with health checks
 - Cross-platform binaries (Linux, macOS, Windows)
 
+[1.3.0]: https://github.com/cloo-solutions/neotexai/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/cloo-solutions/neotexai/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/cloo-solutions/neotexai/releases/tag/v1.1.0
 [1.0.0]: https://github.com/cloo-solutions/neotexai/releases/tag/v1.0.0

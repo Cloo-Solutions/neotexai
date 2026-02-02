@@ -341,11 +341,18 @@ func startServer(t *testing.T, pool *pgxpool.Pool, s3Client *storage.S3Client, p
 	assetSvc := service.NewAssetService(assetRepo, &s3StorageAdapter{client: s3Client})
 	authSvc := service.NewAuthService(orgRepo, apiKeyRepo, uuidGen)
 
+	// Initialize chunk repository for VFS
+	knowledgeChunkRepo := repository.NewKnowledgeChunkRepository(pool)
+	contextRepo := repository.NewContextRepository(pool)
+
 	// Initialize handlers
 	knowledgeHandler := handlers.NewKnowledgeHandler(knowledgeSvc)
 	assetHandler := handlers.NewAssetHandler(assetSvc)
 	authHandler := handlers.NewAuthHandler(authSvc)
-	contextHandler := handlers.NewContextHandler(&simpleContextService{repo: knowledgeRepo}, nil)
+
+	// Create VFS service for context handler
+	vfsSvc := service.NewVFSService(knowledgeRepo, knowledgeChunkRepo, assetRepo, &s3StorageAdapter{client: s3Client}, contextRepo)
+	contextHandler := handlers.NewContextHandlerWithVFS(&simpleContextService{repo: knowledgeRepo}, vfsSvc, nil)
 	projectHandler := handlers.NewProjectHandler(projectRepo)
 
 	cfg := server.RouterConfig{

@@ -33,6 +33,8 @@ type SearchResult struct {
 	UpdatedAt  string  `json:"updated_at,omitempty"`
 	Score      float32 `json:"score"`
 	SourceType string  `json:"source_type"`
+	ChunkID    string  `json:"chunk_id,omitempty"`
+	ChunkIndex int     `json:"chunk_index,omitempty"`
 }
 
 // SearchResponse represents the search API response.
@@ -177,6 +179,9 @@ func runSearch(query, knowledgeType, status, pathPrefix, sourceType, mode, proje
 			}
 			if result.Scope != "" {
 				fmt.Printf("   Scope: %s\n", result.Scope)
+			}
+			if result.ChunkID != "" {
+				fmt.Printf("   Chunk: %s (index %d)\n", result.ChunkID, result.ChunkIndex)
 			}
 			if result.UpdatedAt != "" {
 				fmt.Printf("   Updated: %s\n", result.UpdatedAt)

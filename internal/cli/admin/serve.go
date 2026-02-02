@@ -178,7 +178,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	var contextHandler *handlers.ContextHandler
 	if embeddingClient != nil {
-		contextHandler = handlers.NewContextHandler(service.NewContextService(contextRepo, embeddingClient), searchLogRepo)
+		contextSvc := service.NewContextService(contextRepo, embeddingClient)
+		vfsSvc := service.NewVFSService(knowledgeRepo, knowledgeChunkRepo, assetRepo, storageClient, contextRepo)
+		contextHandler = handlers.NewContextHandlerWithVFS(contextSvc, vfsSvc, searchLogRepo)
 	} else {
 		contextHandler = handlers.NewContextHandler(&NoOpContextService{}, searchLogRepo)
 	}

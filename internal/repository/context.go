@@ -71,7 +71,7 @@ func (r *ContextRepository) SearchKnowledgeChunksSemantic(ctx context.Context, e
 	where = append(where, buildKnowledgeFilters(filters, &args, &argIdx, "")...)
 
 	query := fmt.Sprintf(`
-		SELECT knowledge_id, title, summary, scope_path, content, updated_at,
+		SELECT id, knowledge_id, chunk_index, title, summary, scope_path, content, updated_at,
 		       1.0 / (1.0 + (embedding <=> $1)) AS score
 		FROM knowledge_chunks
 		WHERE %s
@@ -90,7 +90,7 @@ func (r *ContextRepository) SearchKnowledgeChunksSemantic(ctx context.Context, e
 	for rows.Next() {
 		var result service.ChunkSearchResult
 		var scope *string
-		if err := rows.Scan(&result.KnowledgeID, &result.Title, &result.Summary, &scope, &result.Content, &result.UpdatedAt, &result.Score); err != nil {
+		if err := rows.Scan(&result.ChunkID, &result.KnowledgeID, &result.ChunkIndex, &result.Title, &result.Summary, &scope, &result.Content, &result.UpdatedAt, &result.Score); err != nil {
 			return nil, err
 		}
 		if scope != nil {
@@ -114,7 +114,7 @@ func (r *ContextRepository) SearchKnowledgeChunksLexical(ctx context.Context, qu
 	where = append(where, buildKnowledgeFilters(filters, &args, &argIdx, "")...)
 
 	query := fmt.Sprintf(`
-		SELECT knowledge_id, title, summary, scope_path, content, updated_at,
+		SELECT id, knowledge_id, chunk_index, title, summary, scope_path, content, updated_at,
 		       ts_rank_cd(search_tsv, websearch_to_tsquery('english', $1)) AS score
 		FROM knowledge_chunks
 		WHERE %s
@@ -133,7 +133,7 @@ func (r *ContextRepository) SearchKnowledgeChunksLexical(ctx context.Context, qu
 	for rows.Next() {
 		var result service.ChunkSearchResult
 		var scope *string
-		if err := rows.Scan(&result.KnowledgeID, &result.Title, &result.Summary, &scope, &result.Content, &result.UpdatedAt, &result.Score); err != nil {
+		if err := rows.Scan(&result.ChunkID, &result.KnowledgeID, &result.ChunkIndex, &result.Title, &result.Summary, &scope, &result.Content, &result.UpdatedAt, &result.Score); err != nil {
 			return nil, err
 		}
 		if scope != nil {
@@ -419,4 +419,128 @@ func buildAssetFilters(filters service.SearchFilters, args *[]interface{}, argId
 		*argIdx++
 	}
 	return where
+}
+
+// ListKnowledge returns metadata-only knowledge items for the List operation
+func (r *ContextRepository) ListKnowledge(ctx context.Context, input service.ListInput) ([]*service.ListItem, error) {
+	args := []interface{}{input.OrgID}
+	argIdx := 2
+
+	where := []string{"k.org_id = $1"}
+
+	if input.ProjectID != "" {
+		where = append(where, fmt.Sprintf("k.project_id = $%d", argIdx))
+		args = append(args, input.ProjectID)
+		argIdx++
+	}
+	if input.Type != "" {
+		where = append(where, fmt.Sprintf("k.type = $%d", argIdx))
+		args = append(args, input.Type)
+		argIdx++
+	}
+	if input.Status != "" {
+		where = append(where, fmt.Sprintf("k.status = $%d", argIdx))
+		args = append(args, input.Status)
+		argIdx++
+	}
+	if input.PathPrefix != "" {
+		where = append(where, fmt.Sprintf("k.scope_path LIKE $%d", argIdx))
+		args = append(args, input.PathPrefix+"%")
+		argIdx++
+	}
+	if input.UpdatedSince != nil {
+		where = append(where, fmt.Sprintf("k.updated_at >= $%d", argIdx))
+		args = append(args, *input.UpdatedSince)
+		argIdx++
+	}
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	query := fmt.Sprintf(`
+		SELECT k.id, k.title, k.scope_path, k.type, k.status, k.updated_at,
+		       COALESCE((SELECT COUNT(*) FROM knowledge_chunks WHERE knowledge_id = k.id), 0) AS chunk_count
+		FROM knowledge k
+		WHERE %s
+		ORDER BY k.updated_at DESC
+		LIMIT $%d`, strings.Join(where, " AND "), argIdx)
+
+	args = append(args, limit+1) // fetch one extra to detect hasMore
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*service.ListItem
+	for rows.Next() {
+		var item service.ListItem
+		var scope *string
+		if err := rows.Scan(&item.ID, &item.Title, &scope, &item.Type, &item.Status, &item.UpdatedAt, &item.ChunkCount); err != nil {
+			return nil, err
+		}
+		if scope != nil {
+			item.Scope = *scope
+		}
+		item.SourceType = "knowledge"
+		items = append(items, &item)
+	}
+
+	return items, rows.Err()
+}
+
+// ListAssets returns metadata-only asset items for the List operation
+func (r *ContextRepository) ListAssets(ctx context.Context, input service.ListInput) ([]*service.ListItem, error) {
+	args := []interface{}{input.OrgID}
+	argIdx := 2
+
+	where := []string{"org_id = $1"}
+
+	if input.ProjectID != "" {
+		where = append(where, fmt.Sprintf("project_id = $%d", argIdx))
+		args = append(args, input.ProjectID)
+		argIdx++
+	}
+	if input.UpdatedSince != nil {
+		where = append(where, fmt.Sprintf("created_at >= $%d", argIdx))
+		args = append(args, *input.UpdatedSince)
+		argIdx++
+	}
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, filename, mime_type, created_at
+		FROM assets
+		WHERE %s
+		ORDER BY created_at DESC
+		LIMIT $%d`, strings.Join(where, " AND "), argIdx)
+
+	args = append(args, limit+1) // fetch one extra to detect hasMore
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*service.ListItem
+	for rows.Next() {
+		var item service.ListItem
+		if err := rows.Scan(&item.ID, &item.Filename, &item.MimeType, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Title = item.Filename
+		item.SourceType = "asset"
+		item.ChunkCount = 0
+		items = append(items, &item)
+	}
+
+	return items, rows.Err()
 }

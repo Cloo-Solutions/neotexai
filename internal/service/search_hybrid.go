@@ -205,16 +205,24 @@ func aggregateChunkResults(chunks []*ChunkSearchResult) []*SearchResult {
 	if len(chunks) == 0 {
 		return nil
 	}
-	seen := make(map[string]struct{}, len(chunks))
-	results := make([]*SearchResult, 0, len(chunks))
+	// Track best chunk per knowledge ID (highest score), preserving first-seen order
+	best := make(map[string]*ChunkSearchResult, len(chunks))
+	order := make([]string, 0, len(chunks))
 	for _, c := range chunks {
 		if c == nil {
 			continue
 		}
-		if _, ok := seen[c.KnowledgeID]; ok {
-			continue
+		existing, ok := best[c.KnowledgeID]
+		if !ok {
+			order = append(order, c.KnowledgeID)
+			best[c.KnowledgeID] = c
+		} else if c.Score > existing.Score {
+			best[c.KnowledgeID] = c
 		}
-		seen[c.KnowledgeID] = struct{}{}
+	}
+	results := make([]*SearchResult, 0, len(best))
+	for _, knowledgeID := range order {
+		c := best[knowledgeID]
 		results = append(results, &SearchResult{
 			ID:         c.KnowledgeID,
 			Title:      c.Title,
@@ -224,6 +232,8 @@ func aggregateChunkResults(chunks []*ChunkSearchResult) []*SearchResult {
 			UpdatedAt:  c.UpdatedAt,
 			Score:      c.Score,
 			SourceType: "knowledge",
+			ChunkID:    c.ChunkID,
+			ChunkIndex: c.ChunkIndex,
 		})
 	}
 	return results
@@ -239,6 +249,10 @@ func prepareResults(results []*SearchResult) {
 			r.Snippet = makeSnippet(r.Summary)
 		} else {
 			r.Snippet = makeSnippet(r.Snippet)
+		}
+		// Set ChunkIndex to -1 for non-chunk results (empty ChunkID)
+		if r.ChunkID == "" {
+			r.ChunkIndex = -1
 		}
 	}
 }

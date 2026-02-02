@@ -50,6 +50,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		})
 
 		r.Get("/context", cfg.ContextHandler.GetManifest)
+		r.Post("/context/open", cfg.ContextHandler.Open)
+		r.Post("/context/list", cfg.ContextHandler.List)
 		r.Post("/search", cfg.ContextHandler.Search)
 		r.Post("/search/feedback", cfg.ContextHandler.SearchFeedback)
 

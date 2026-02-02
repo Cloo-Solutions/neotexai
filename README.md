@@ -68,6 +68,12 @@ neotex search "postgres migration" --exact
 
 # Get specific item (optionally link to search for feedback)
 neotex get <id> --search-id <search_id>
+
+# Context retrieval (VFS-style access for agents)
+neotex context open <id>                    # Get full content
+neotex context open <id> --lines 0:50       # Get lines 0-50
+neotex context open <id> --chunk <chunk_id> # Get specific chunk
+neotex context list --path /docs --type doc # List items with filters
 ```
 
 ## Configuration

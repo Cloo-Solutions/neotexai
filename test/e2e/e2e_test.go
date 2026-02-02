@@ -534,6 +534,367 @@ func TestE2E_CLIWorkflow(t *testing.T) {
 	})
 }
 
+// TestE2E_ContextVFS tests the virtual filesystem endpoints (open/list)
+func TestE2E_ContextVFS(t *testing.T) {
+	env := SetupE2EEnv(t)
+	defer env.Cleanup()
+	env.Bootstrap()
+
+	// Create knowledge items for testing
+	var knowledgeID string
+	var chunkID string
+
+	t.Run("setup: create knowledge with chunks", func(t *testing.T) {
+		// Create knowledge with enough content to generate chunks
+		longContent := "# API Documentation\n\n"
+		for i := 0; i < 50; i++ {
+			longContent += "## Section " + string(rune('A'+i%26)) + "\n\n"
+			longContent += "This is section content that provides detailed information about the API.\n\n"
+		}
+
+		resp, err := env.Post("/knowledge", map[string]interface{}{
+			"type":    "guideline",
+			"title":   "API Documentation",
+			"summary": "Complete API documentation",
+			"body_md": longContent,
+			"scope":   "/docs/api",
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var k struct {
+			ID string `json:"id"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &k))
+		knowledgeID = k.ID
+		assert.NotEmpty(t, knowledgeID)
+
+		// Wait for potential chunking to complete
+		time.Sleep(100 * time.Millisecond)
+
+		// Try to get chunk IDs from the database
+		rows, err := env.Pool.Query(env.Ctx,
+			"SELECT id FROM knowledge_chunks WHERE knowledge_id = $1 ORDER BY chunk_index LIMIT 1",
+			knowledgeID)
+		if err == nil {
+			defer rows.Close()
+			if rows.Next() {
+				rows.Scan(&chunkID)
+			}
+		}
+	})
+
+	t.Run("context open: retrieves knowledge content", func(t *testing.T) {
+		resp, err := env.Post("/context/open", map[string]interface{}{
+			"id":          knowledgeID,
+			"source_type": "knowledge",
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var openResp struct {
+			ID         string `json:"id"`
+			SourceType string `json:"source_type"`
+			Title      string `json:"title"`
+			Content    string `json:"content"`
+			TotalLines int    `json:"total_lines"`
+			TotalChars int    `json:"total_chars"`
+			ChunkCount int    `json:"chunk_count"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &openResp))
+		assert.Equal(t, knowledgeID, openResp.ID)
+		assert.Equal(t, "knowledge", openResp.SourceType)
+		assert.Equal(t, "API Documentation", openResp.Title)
+		assert.NotEmpty(t, openResp.Content)
+		assert.Greater(t, openResp.TotalLines, 0)
+	})
+
+	t.Run("context open: retrieves with line range", func(t *testing.T) {
+		resp, err := env.Post("/context/open", map[string]interface{}{
+			"id": knowledgeID,
+			"range": map[string]int{
+				"start_line": 0,
+				"end_line":   10,
+			},
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var openResp struct {
+			Content    string `json:"content"`
+			TotalLines int    `json:"total_lines"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &openResp))
+		// Content should be truncated
+		lines := strings.Split(openResp.Content, "\n")
+		assert.LessOrEqual(t, len(lines), 10)
+	})
+
+	t.Run("context open: retrieves specific chunk if available", func(t *testing.T) {
+		if chunkID == "" {
+			t.Skip("No chunks available for this knowledge item")
+		}
+
+		resp, err := env.Post("/context/open", map[string]interface{}{
+			"id":       knowledgeID,
+			"chunk_id": chunkID,
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var openResp struct {
+			ChunkID    string `json:"chunk_id"`
+			ChunkIndex int    `json:"chunk_index"`
+			ChunkCount int    `json:"chunk_count"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &openResp))
+		assert.Equal(t, chunkID, openResp.ChunkID)
+		assert.GreaterOrEqual(t, openResp.ChunkIndex, 0)
+	})
+
+	t.Run("context list: returns knowledge items", func(t *testing.T) {
+		resp, err := env.Post("/context/list", map[string]interface{}{
+			"source_type": "knowledge",
+			"limit":       50,
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var listResp struct {
+			Items []struct {
+				ID         string `json:"id"`
+				Title      string `json:"title"`
+				SourceType string `json:"source_type"`
+				ChunkCount int    `json:"chunk_count"`
+			} `json:"items"`
+			HasMore bool `json:"has_more"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &listResp))
+		assert.GreaterOrEqual(t, len(listResp.Items), 1)
+
+		// Find our created knowledge
+		found := false
+		for _, item := range listResp.Items {
+			if item.ID == knowledgeID {
+				found = true
+				assert.Equal(t, "knowledge", item.SourceType)
+				assert.Equal(t, "API Documentation", item.Title)
+				break
+			}
+		}
+		assert.True(t, found, "created knowledge should be in list")
+	})
+
+	t.Run("context list: filters by path prefix", func(t *testing.T) {
+		resp, err := env.Post("/context/list", map[string]interface{}{
+			"path_prefix": "/docs/api",
+			"source_type": "knowledge",
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var listResp struct {
+			Items []struct {
+				ID    string `json:"id"`
+				Scope string `json:"scope"`
+			} `json:"items"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &listResp))
+
+		// All items should have scope starting with /docs/api
+		for _, item := range listResp.Items {
+			assert.True(t, strings.HasPrefix(item.Scope, "/docs/api"),
+				"item %s has scope %s which doesn't start with /docs/api", item.ID, item.Scope)
+		}
+	})
+
+	t.Run("context list: filters by type", func(t *testing.T) {
+		resp, err := env.Post("/context/list", map[string]interface{}{
+			"type":        "guideline",
+			"source_type": "knowledge",
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var listResp struct {
+			Items []struct {
+				ID   string `json:"id"`
+				Type string `json:"type"`
+			} `json:"items"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &listResp))
+
+		for _, item := range listResp.Items {
+			assert.Equal(t, "guideline", item.Type)
+		}
+	})
+
+	t.Run("search: returns chunk info in results", func(t *testing.T) {
+		resp, err := env.Post("/search", map[string]interface{}{
+			"query": "API Documentation",
+			"limit": 10,
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var searchResp struct {
+			Results []struct {
+				ID         string `json:"id"`
+				ChunkID    string `json:"chunk_id"`
+				ChunkIndex int    `json:"chunk_index"`
+			} `json:"results"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &searchResp))
+		assert.GreaterOrEqual(t, len(searchResp.Results), 1)
+
+		// Find our knowledge in results
+		found := false
+		for _, r := range searchResp.Results {
+			if r.ID == knowledgeID {
+				found = true
+				// ChunkID may or may not be set depending on whether chunking occurred
+				break
+			}
+		}
+		assert.True(t, found, "created knowledge should be in search results")
+	})
+}
+
+// TestE2E_ContextVFS_Assets tests asset open functionality
+func TestE2E_ContextVFS_Assets(t *testing.T) {
+	env := SetupE2EEnv(t)
+	defer env.Cleanup()
+	env.Bootstrap()
+
+	var assetID string
+	fileContent := []byte("Asset content for VFS testing")
+	sha256Hash := SHA256Sum(fileContent)
+
+	t.Run("setup: upload asset", func(t *testing.T) {
+		initResp, err := env.Post("/assets/init", map[string]interface{}{
+			"filename":  "vfs-test.txt",
+			"mime_type": "text/plain",
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var init struct {
+			AssetID    string `json:"asset_id"`
+			StorageKey string `json:"storage_key"`
+			UploadURL  string `json:"upload_url"`
+		}
+		require.NoError(t, json.Unmarshal(initResp.Data, &init))
+
+		err = env.UploadFile(init.UploadURL, fileContent, "text/plain")
+		require.NoError(t, err)
+
+		_, err = env.Post("/assets/complete", map[string]interface{}{
+			"asset_id":    init.AssetID,
+			"storage_key": init.StorageKey,
+			"filename":    "vfs-test.txt",
+			"mime_type":   "text/plain",
+			"sha256":      sha256Hash,
+			"keywords":    []string{"test", "vfs"},
+			"description": "VFS test file",
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		assetID = init.AssetID
+	})
+
+	t.Run("context open: asset metadata only", func(t *testing.T) {
+		resp, err := env.Post("/context/open", map[string]interface{}{
+			"id":          assetID,
+			"source_type": "asset",
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var openResp struct {
+			ID          string   `json:"id"`
+			SourceType  string   `json:"source_type"`
+			Filename    string   `json:"filename"`
+			MimeType    string   `json:"mime_type"`
+			Description string   `json:"description"`
+			Keywords    []string `json:"keywords"`
+			DownloadURL string   `json:"download_url"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &openResp))
+		assert.Equal(t, assetID, openResp.ID)
+		assert.Equal(t, "asset", openResp.SourceType)
+		assert.Equal(t, "vfs-test.txt", openResp.Filename)
+		assert.Equal(t, "text/plain", openResp.MimeType)
+		assert.Equal(t, "VFS test file", openResp.Description)
+		assert.Contains(t, openResp.Keywords, "test")
+		assert.Empty(t, openResp.DownloadURL) // Not requested
+	})
+
+	t.Run("context open: asset with download URL", func(t *testing.T) {
+		resp, err := env.Post("/context/open", map[string]interface{}{
+			"id":          assetID,
+			"source_type": "asset",
+			"include_url": true,
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var openResp struct {
+			DownloadURL string `json:"download_url"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &openResp))
+		assert.NotEmpty(t, openResp.DownloadURL)
+		assert.Contains(t, openResp.DownloadURL, "http")
+	})
+
+	t.Run("context list: returns assets", func(t *testing.T) {
+		resp, err := env.Post("/context/list", map[string]interface{}{
+			"source_type": "asset",
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var listResp struct {
+			Items []struct {
+				ID         string `json:"id"`
+				Title      string `json:"title"`
+				SourceType string `json:"source_type"`
+				Filename   string `json:"filename"`
+				MimeType   string `json:"mime_type"`
+			} `json:"items"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &listResp))
+		assert.GreaterOrEqual(t, len(listResp.Items), 1)
+
+		found := false
+		for _, item := range listResp.Items {
+			if item.ID == assetID {
+				found = true
+				assert.Equal(t, "asset", item.SourceType)
+				assert.Equal(t, "vfs-test.txt", item.Filename)
+				break
+			}
+		}
+		assert.True(t, found, "created asset should be in list")
+	})
+
+	t.Run("context list: returns both knowledge and assets", func(t *testing.T) {
+		resp, err := env.Post("/context/list", map[string]interface{}{
+			"source_type": "all",
+		}, env.AuthToken)
+		require.NoError(t, err)
+
+		var listResp struct {
+			Items []struct {
+				SourceType string `json:"source_type"`
+			} `json:"items"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &listResp))
+
+		hasKnowledge := false
+		hasAsset := false
+		for _, item := range listResp.Items {
+			if item.SourceType == "knowledge" {
+				hasKnowledge = true
+			}
+			if item.SourceType == "asset" {
+				hasAsset = true
+			}
+		}
+		// At minimum we should have the asset we created
+		assert.True(t, hasAsset, "should have assets in list")
+		// Knowledge may or may not exist depending on test order
+		t.Logf("hasKnowledge: %v, hasAsset: %v", hasKnowledge, hasAsset)
+	})
+}
+
 // TestE2E_FullWorkflow tests the complete user journey
 func TestE2E_FullWorkflow(t *testing.T) {
 	env := SetupE2EEnv(t)

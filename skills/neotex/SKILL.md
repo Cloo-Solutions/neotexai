@@ -42,6 +42,25 @@ neotex asset get <asset_id> --search-id <search_id>
 - Use `--exact` to disable query expansion
 - Pass `--search-id` to help the system learn which results were selected
 
+## Precise Content Retrieval (VFS)
+
+For large documents or when you need specific sections:
+
+```bash
+# Open with line range (like head/tail)
+neotex context open <id> --lines 0:100 --max-chars 4000
+
+# Open specific chunk from search result
+neotex context open <id> --chunk <chunk_id>
+
+# List items matching filters (like ls)
+neotex context list --path /docs --type guideline --source knowledge
+```
+
+- Search results include `chunk_id` for precise retrieval
+- Use `--max-chars` to limit response size (default 4000)
+- Prefer chunk retrieval over full document when search provides chunk_id
+
 ## When to Store Knowledge
 
 After completing significant work, evaluate:

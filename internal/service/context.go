@@ -53,11 +53,17 @@ type SearchResult struct {
 	Score     float32
 	// SourceType is "knowledge" or "asset"
 	SourceType string
+	// ChunkID is the UUID of the best matching chunk (empty for non-chunk or asset results)
+	ChunkID string
+	// ChunkIndex is the position within the knowledge item (-1 if not applicable)
+	ChunkIndex int
 }
 
 // ChunkSearchResult represents a chunk-level knowledge hit.
 type ChunkSearchResult struct {
 	KnowledgeID string
+	ChunkID     string
+	ChunkIndex  int
 	Title       string
 	Summary     string
 	Scope       string
@@ -409,12 +415,16 @@ func rankByRelevance(results []*SearchResult, filePath string) []*SearchResult {
 		}
 	}
 
-	// Sort by relevance score (descending), then by semantic score (descending)
+	// Sort by relevance score (descending), then by semantic score (descending), then by ID for stability
 	sort.Slice(ranked, func(i, j int) bool {
 		if ranked[i].relevanceScore != ranked[j].relevanceScore {
 			return ranked[i].relevanceScore > ranked[j].relevanceScore
 		}
-		return ranked[i].Score > ranked[j].Score
+		if ranked[i].Score != ranked[j].Score {
+			return ranked[i].Score > ranked[j].Score
+		}
+		// Tiebreaker: sort by ID for deterministic ordering
+		return ranked[i].ID < ranked[j].ID
 	})
 
 	// Convert back to SearchResult slice

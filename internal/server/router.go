@@ -51,6 +51,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		r.Get("/context", cfg.ContextHandler.GetManifest)
 		r.Post("/search", cfg.ContextHandler.Search)
+		r.Post("/search/feedback", cfg.ContextHandler.SearchFeedback)
 
 		r.Route("/projects", func(r chi.Router) {
 			r.Post("/", cfg.ProjectHandler.Create)

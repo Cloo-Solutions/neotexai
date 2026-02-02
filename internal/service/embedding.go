@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cloo-solutions/neotexai/internal/domain"
 )
@@ -25,26 +26,41 @@ type EmbeddingAssetRepository interface {
 	UpdateEmbedding(ctx context.Context, id string, embedding []float32) error
 }
 
+// EmbeddingChunkRepository defines the repository interface for chunked knowledge embeddings
+type EmbeddingChunkRepository interface {
+	ReplaceChunks(ctx context.Context, knowledgeID string, chunks []domain.KnowledgeChunk) error
+}
+
 // EmbeddingService handles embedding generation for knowledge and asset items
 type EmbeddingService struct {
 	client    EmbeddingClient
 	repo      EmbeddingKnowledgeRepository
 	assetRepo EmbeddingAssetRepository
+	chunkRepo EmbeddingChunkRepository
+	chunkCfg  ChunkConfig
 }
 
 // NewEmbeddingService creates a new EmbeddingService instance
 func NewEmbeddingService(client EmbeddingClient, repo EmbeddingKnowledgeRepository) *EmbeddingService {
-	return &EmbeddingService{
-		client: client,
-		repo:   repo,
-	}
+	return NewEmbeddingServiceWithAssetsAndChunks(client, repo, nil, nil)
 }
 
 func NewEmbeddingServiceWithAssets(client EmbeddingClient, repo EmbeddingKnowledgeRepository, assetRepo EmbeddingAssetRepository) *EmbeddingService {
+	return NewEmbeddingServiceWithAssetsAndChunks(client, repo, assetRepo, nil)
+}
+
+func NewEmbeddingServiceWithAssetsAndChunks(
+	client EmbeddingClient,
+	repo EmbeddingKnowledgeRepository,
+	assetRepo EmbeddingAssetRepository,
+	chunkRepo EmbeddingChunkRepository,
+) *EmbeddingService {
 	return &EmbeddingService{
 		client:    client,
 		repo:      repo,
 		assetRepo: assetRepo,
+		chunkRepo: chunkRepo,
+		chunkCfg:  DefaultChunkConfig(),
 	}
 }
 
@@ -66,7 +82,56 @@ func (s *EmbeddingService) GenerateEmbedding(ctx context.Context, knowledgeID st
 		return fmt.Errorf("failed to generate embedding: %w", err)
 	}
 
-	// Store the embedding
+	// Generate chunk embeddings when enabled
+	if s.chunkRepo != nil {
+		chunkSource := knowledge.BodyMD
+		if strings.TrimSpace(chunkSource) == "" {
+			if knowledge.Summary != "" {
+				chunkSource = knowledge.Summary
+			} else {
+				chunkSource = knowledge.Title
+			}
+		}
+
+		chunks := chunkText(chunkSource, s.chunkCfg)
+		chunkEntries := make([]domain.KnowledgeChunk, 0, len(chunks))
+		createdAt := time.Now().UTC()
+		updatedAt := knowledge.UpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = createdAt
+		}
+
+		for i, chunk := range chunks {
+			embedText := buildChunkEmbeddingText(knowledge, chunk)
+			chunkEmbedding, err := s.client.GenerateEmbedding(ctx, embedText)
+			if err != nil {
+				return fmt.Errorf("failed to generate chunk embedding: %w", err)
+			}
+
+			entry := domain.KnowledgeChunk{
+				KnowledgeID: knowledge.ID,
+				OrgID:       knowledge.OrgID,
+				ProjectID:   knowledge.ProjectID,
+				Type:        knowledge.Type,
+				Status:      knowledge.Status,
+				Title:       knowledge.Title,
+				Summary:     knowledge.Summary,
+				Scope:       knowledge.Scope,
+				ChunkIndex:  i,
+				Content:     chunk,
+				Embedding:   chunkEmbedding,
+				CreatedAt:   createdAt,
+				UpdatedAt:   updatedAt,
+			}
+			chunkEntries = append(chunkEntries, entry)
+		}
+
+		if err := s.chunkRepo.ReplaceChunks(ctx, knowledgeID, chunkEntries); err != nil {
+			return fmt.Errorf("failed to update knowledge chunks: %w", err)
+		}
+	}
+
+	// Store the document-level embedding
 	if err := s.repo.UpdateEmbedding(ctx, knowledgeID, embedding); err != nil {
 		return fmt.Errorf("failed to update embedding: %w", err)
 	}
@@ -114,6 +179,20 @@ func buildEmbeddingText(k *domain.Knowledge) string {
 		parts = append(parts, k.BodyMD)
 	}
 
+	return strings.Join(parts, "\n\n")
+}
+
+func buildChunkEmbeddingText(k *domain.Knowledge, chunk string) string {
+	var parts []string
+	if k.Title != "" {
+		parts = append(parts, k.Title)
+	}
+	if k.Summary != "" {
+		parts = append(parts, k.Summary)
+	}
+	if chunk != "" {
+		parts = append(parts, chunk)
+	}
 	return strings.Join(parts, "\n\n")
 }
 

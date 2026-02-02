@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -10,56 +11,77 @@ import (
 
 // SearchRequest represents the search API request.
 type SearchRequest struct {
-	Query     string `json:"query"`
-	ProjectID string `json:"project_id,omitempty"`
-	Type      string `json:"type,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
-	Cursor    string `json:"cursor,omitempty"`
+	Query      string `json:"query"`
+	ProjectID  string `json:"project_id,omitempty"`
+	Type       string `json:"type,omitempty"`
+	Status     string `json:"status,omitempty"`
+	PathPrefix string `json:"path_prefix,omitempty"`
+	SourceType string `json:"source_type,omitempty"`
+	Mode       string `json:"mode,omitempty"`
+	Exact      bool   `json:"exact,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
+	Cursor     string `json:"cursor,omitempty"`
 }
 
 // SearchResult represents a search result.
 type SearchResult struct {
-	ID      string  `json:"id"`
-	Title   string  `json:"title"`
-	Summary string  `json:"summary,omitempty"`
-	Scope   string  `json:"scope,omitempty"`
-	Score   float32 `json:"score"`
+	ID         string  `json:"id"`
+	Title      string  `json:"title"`
+	Summary    string  `json:"summary,omitempty"`
+	Scope      string  `json:"scope,omitempty"`
+	Snippet    string  `json:"snippet,omitempty"`
+	UpdatedAt  string  `json:"updated_at,omitempty"`
+	Score      float32 `json:"score"`
+	SourceType string  `json:"source_type"`
 }
 
 // SearchResponse represents the search API response.
 type SearchResponse struct {
-	Results []SearchResult `json:"results"`
-	Cursor  string         `json:"cursor,omitempty"`
-	HasMore bool           `json:"has_more"`
+	Results  []SearchResult `json:"results"`
+	Cursor   string         `json:"cursor,omitempty"`
+	HasMore  bool           `json:"has_more"`
+	SearchID string         `json:"search_id,omitempty"`
 }
 
 // SearchCmd creates the search command.
 func SearchCmd() *cobra.Command {
 	var (
 		knowledgeType string
+		status        string
+		pathPrefix    string
+		sourceType    string
+		mode          string
+		projectID     string
 		limit         int
 		cursor        string
+		exact         bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "search <query>",
-		Short: "Search knowledge",
-		Long:  "Searches the knowledge base using semantic search.",
+		Short: "Search knowledge and assets",
+		Long:  "Searches the knowledge base and assets using hybrid semantic + lexical search.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			outputJSON, _ := cmd.Flags().GetBool("output")
-			return runSearch(args[0], knowledgeType, limit, cursor, outputJSON)
+			return runSearch(args[0], knowledgeType, status, pathPrefix, sourceType, mode, projectID, exact, limit, cursor, outputJSON)
 		},
 	}
 
 	cmd.Flags().StringVarP(&knowledgeType, "type", "t", "", "Filter by knowledge type")
+	cmd.Flags().StringVar(&status, "status", "", "Filter by knowledge status")
+	cmd.Flags().StringVar(&pathPrefix, "path", "", "Filter by scope path prefix")
+	cmd.Flags().StringVar(&sourceType, "source", "", "Filter by source type (knowledge|asset)")
+	cmd.Flags().StringVar(&mode, "mode", "", "Search mode (hybrid|semantic|lexical)")
+	cmd.Flags().StringVar(&projectID, "project", "", "Override project ID from config")
+	cmd.Flags().BoolVar(&exact, "exact", false, "Disable query expansion")
 	cmd.Flags().IntVarP(&limit, "limit", "n", 20, "Maximum number of results")
 	cmd.Flags().StringVar(&cursor, "cursor", "", "Pagination cursor from previous response")
 
 	return cmd
 }
 
-func runSearch(query, knowledgeType string, limit int, cursor string, outputJSON bool) error {
+func runSearch(query, knowledgeType, status, pathPrefix, sourceType, mode, projectID string, exact bool, limit int, cursor string, outputJSON bool) error {
 	// Load config to get project ID
 	config, err := LoadConfig()
 	if err != nil {
@@ -72,13 +94,47 @@ func runSearch(query, knowledgeType string, limit int, cursor string, outputJSON
 		return err
 	}
 
+	cleanQuery, inline := parseInlineFilters(query)
+	if cleanQuery == "" {
+		return fmt.Errorf("query is required (inline filters must be combined with search terms)")
+	}
+
+	if knowledgeType == "" {
+		knowledgeType = inline.Type
+	}
+	if status == "" {
+		status = inline.Status
+	}
+	if pathPrefix == "" {
+		pathPrefix = inline.PathPrefix
+	}
+	if sourceType == "" {
+		sourceType = inline.SourceType
+	}
+	if mode == "" {
+		mode = inline.Mode
+	}
+
+	effectiveProjectID := config.ProjectID
+	if inline.ProjectID != "" {
+		effectiveProjectID = inline.ProjectID
+	}
+	if projectID != "" {
+		effectiveProjectID = projectID
+	}
+
 	// Build search request
 	req := SearchRequest{
-		Query:     query,
-		ProjectID: config.ProjectID,
-		Type:      knowledgeType,
-		Limit:     limit,
-		Cursor:    cursor,
+		Query:      cleanQuery,
+		ProjectID:  effectiveProjectID,
+		Type:       knowledgeType,
+		Status:     status,
+		PathPrefix: pathPrefix,
+		SourceType: sourceType,
+		Mode:       mode,
+		Exact:      exact,
+		Limit:      limit,
+		Cursor:     cursor,
 	}
 
 	// Perform search
@@ -104,8 +160,14 @@ func runSearch(query, knowledgeType string, limit int, cursor string, outputJSON
 
 		fmt.Printf("Found %d results:\n\n", len(searchResp.Results))
 		for i, result := range searchResp.Results {
-			fmt.Printf("%d. %s (%.2f)\n", i+1, result.Title, result.Score)
-			if result.Summary != "" {
+			sourceType := result.SourceType
+			if sourceType == "" {
+				sourceType = "knowledge"
+			}
+			fmt.Printf("%d. %s [%s] (%.2f)\n", i+1, result.Title, sourceType, result.Score)
+			if result.Snippet != "" {
+				fmt.Printf("   %s\n", highlightSnippet(result.Snippet, cleanQuery))
+			} else if result.Summary != "" {
 				// Truncate summary to 100 chars
 				summary := result.Summary
 				if len(summary) > 100 {
@@ -116,6 +178,9 @@ func runSearch(query, knowledgeType string, limit int, cursor string, outputJSON
 			if result.Scope != "" {
 				fmt.Printf("   Scope: %s\n", result.Scope)
 			}
+			if result.UpdatedAt != "" {
+				fmt.Printf("   Updated: %s\n", result.UpdatedAt)
+			}
 			fmt.Printf("   ID: %s\n", result.ID)
 			if i < len(searchResp.Results)-1 {
 				fmt.Println(strings.Repeat("-", 40))
@@ -125,7 +190,77 @@ func runSearch(query, knowledgeType string, limit int, cursor string, outputJSON
 			fmt.Printf("\n%s\n", strings.Repeat("-", 40))
 			fmt.Printf("More results available. Use --cursor %s\n", searchResp.Cursor)
 		}
+		if searchResp.SearchID != "" {
+			fmt.Printf("\nSearch ID: %s\n", searchResp.SearchID)
+		}
 	}
 
 	return nil
+}
+
+type inlineSearchFilters struct {
+	Type       string
+	Status     string
+	PathPrefix string
+	SourceType string
+	Mode       string
+	ProjectID  string
+}
+
+func parseInlineFilters(query string) (string, inlineSearchFilters) {
+	filters := inlineSearchFilters{}
+	parts := strings.Fields(query)
+	if len(parts) == 0 {
+		return "", filters
+	}
+	remaining := make([]string, 0, len(parts))
+	for _, part := range parts {
+		key, value, ok := strings.Cut(part, ":")
+		if !ok {
+			remaining = append(remaining, part)
+			continue
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.Trim(strings.TrimSpace(value), "\"'")
+		if value == "" {
+			remaining = append(remaining, part)
+			continue
+		}
+		switch key {
+		case "type":
+			filters.Type = value
+		case "status":
+			filters.Status = value
+		case "path", "scope":
+			filters.PathPrefix = value
+		case "source", "kind":
+			filters.SourceType = value
+		case "mode":
+			filters.Mode = value
+		case "project":
+			filters.ProjectID = value
+		default:
+			remaining = append(remaining, part)
+		}
+	}
+	return strings.Join(remaining, " "), filters
+}
+
+func highlightSnippet(snippet, query string) string {
+	if snippet == "" || query == "" {
+		return snippet
+	}
+	terms := strings.Fields(strings.ToLower(query))
+	if len(terms) == 0 {
+		return snippet
+	}
+	out := snippet
+	for _, term := range terms {
+		if len(term) < 3 {
+			continue
+		}
+		re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(term))
+		out = re.ReplaceAllString(out, "[$0]")
+	}
+	return out
 }

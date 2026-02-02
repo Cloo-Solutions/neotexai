@@ -31,8 +31,16 @@ Search neotex when user asks about:
 
 ```bash
 neotex search "<query>" --limit 5
-neotex get <id>   # fetch if score > 0.7
+neotex search "type:guideline status:active path:backend <query>" --mode hybrid
+neotex search "<query>" --source asset --mode lexical
+neotex search "<query>" --exact
+neotex get <id> --search-id <search_id>   # fetch if score > 0.7
+neotex asset get <asset_id> --search-id <search_id>
 ```
+
+- Use `--mode lexical` for exact terms, filenames, or code identifiers
+- Use `--exact` to disable query expansion
+- Pass `--search-id` to help the system learn which results were selected
 
 ## When to Store Knowledge
 

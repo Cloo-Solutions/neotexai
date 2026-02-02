@@ -14,15 +14,19 @@ import (
 )
 
 type KnowledgeRepository struct {
-	pool *pgxpool.Pool
+	db dbtx
 }
 
 func NewKnowledgeRepository(pool *pgxpool.Pool) *KnowledgeRepository {
-	return &KnowledgeRepository{pool: pool}
+	return &KnowledgeRepository{db: pool}
+}
+
+func NewKnowledgeRepositoryWithTx(tx pgx.Tx) *KnowledgeRepository {
+	return &KnowledgeRepository{db: tx}
 }
 
 func (r *KnowledgeRepository) Create(ctx context.Context, k *domain.Knowledge) error {
-	_, err := r.pool.Exec(ctx,
+	_, err := r.db.Exec(ctx,
 		`INSERT INTO knowledge (id, org_id, project_id, type, status, title, summary, body_md, scope_path, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		k.ID, k.OrgID, nullableString(k.ProjectID), k.Type, k.Status, k.Title, k.Summary, k.BodyMD, nullableString(k.Scope), k.CreatedAt, k.UpdatedAt,
@@ -33,7 +37,7 @@ func (r *KnowledgeRepository) Create(ctx context.Context, k *domain.Knowledge) e
 func (r *KnowledgeRepository) GetByID(ctx context.Context, id string) (*domain.Knowledge, error) {
 	var k domain.Knowledge
 	var projectID, scope *string
-	err := r.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, org_id, project_id, type, status, title, summary, body_md, scope_path, created_at, updated_at
 		 FROM knowledge WHERE id = $1`,
 		id,
@@ -54,7 +58,7 @@ func (r *KnowledgeRepository) GetByID(ctx context.Context, id string) (*domain.K
 }
 
 func (r *KnowledgeRepository) ListByOrg(ctx context.Context, orgID string) ([]*domain.Knowledge, error) {
-	rows, err := r.pool.Query(ctx,
+	rows, err := r.db.Query(ctx,
 		`SELECT id, org_id, project_id, type, status, title, summary, body_md, scope_path, created_at, updated_at
 		 FROM knowledge WHERE org_id = $1 ORDER BY updated_at DESC`,
 		orgID,
@@ -67,7 +71,7 @@ func (r *KnowledgeRepository) ListByOrg(ctx context.Context, orgID string) ([]*d
 }
 
 func (r *KnowledgeRepository) ListByProject(ctx context.Context, projectID string) ([]*domain.Knowledge, error) {
-	rows, err := r.pool.Query(ctx,
+	rows, err := r.db.Query(ctx,
 		`SELECT id, org_id, project_id, type, status, title, summary, body_md, scope_path, created_at, updated_at
 		 FROM knowledge WHERE project_id = $1 ORDER BY updated_at DESC`,
 		projectID,
@@ -88,7 +92,7 @@ func (r *KnowledgeRepository) ListByOrgWithCursor(ctx context.Context, orgID str
 	var err error
 
 	if cursor != nil {
-		rows, err = r.pool.Query(ctx,
+			rows, err = r.db.Query(ctx,
 			`SELECT id, org_id, project_id, type, status, title, summary, body_md, scope_path, created_at, updated_at
 			 FROM knowledge 
 			 WHERE org_id = $1 AND (updated_at, id) < ($2, $3)
@@ -97,7 +101,7 @@ func (r *KnowledgeRepository) ListByOrgWithCursor(ctx context.Context, orgID str
 			orgID, cursor.Timestamp, cursor.LastID, limit+1,
 		)
 	} else {
-		rows, err = r.pool.Query(ctx,
+		rows, err = r.db.Query(ctx,
 			`SELECT id, org_id, project_id, type, status, title, summary, body_md, scope_path, created_at, updated_at
 			 FROM knowledge 
 			 WHERE org_id = $1
@@ -144,7 +148,7 @@ func (r *KnowledgeRepository) ListByProjectWithCursor(ctx context.Context, proje
 	var err error
 
 	if cursor != nil {
-		rows, err = r.pool.Query(ctx,
+			rows, err = r.db.Query(ctx,
 			`SELECT id, org_id, project_id, type, status, title, summary, body_md, scope_path, created_at, updated_at
 			 FROM knowledge 
 			 WHERE project_id = $1 AND (updated_at, id) < ($2, $3)
@@ -153,7 +157,7 @@ func (r *KnowledgeRepository) ListByProjectWithCursor(ctx context.Context, proje
 			projectID, cursor.Timestamp, cursor.LastID, limit+1,
 		)
 	} else {
-		rows, err = r.pool.Query(ctx,
+		rows, err = r.db.Query(ctx,
 			`SELECT id, org_id, project_id, type, status, title, summary, body_md, scope_path, created_at, updated_at
 			 FROM knowledge 
 			 WHERE project_id = $1
@@ -193,7 +197,7 @@ func (r *KnowledgeRepository) ListByProjectWithCursor(ctx context.Context, proje
 
 func (r *KnowledgeRepository) Update(ctx context.Context, k *domain.Knowledge) error {
 	k.UpdatedAt = time.Now().UTC()
-	cmdTag, err := r.pool.Exec(ctx,
+	cmdTag, err := r.db.Exec(ctx,
 		`UPDATE knowledge SET type = $1, status = $2, title = $3, summary = $4, body_md = $5, scope_path = $6, updated_at = $7
 		 WHERE id = $8`,
 		k.Type, k.Status, k.Title, k.Summary, k.BodyMD, nullableString(k.Scope), k.UpdatedAt, k.ID,
@@ -208,7 +212,7 @@ func (r *KnowledgeRepository) Update(ctx context.Context, k *domain.Knowledge) e
 }
 
 func (r *KnowledgeRepository) Delete(ctx context.Context, id string) error {
-	cmdTag, err := r.pool.Exec(ctx,
+	cmdTag, err := r.db.Exec(ctx,
 		`DELETE FROM knowledge WHERE id = $1`,
 		id,
 	)
@@ -222,7 +226,7 @@ func (r *KnowledgeRepository) Delete(ctx context.Context, id string) error {
 }
 
 func (r *KnowledgeRepository) UpdateEmbedding(ctx context.Context, id string, embedding []float32) error {
-	cmdTag, err := r.pool.Exec(ctx,
+	cmdTag, err := r.db.Exec(ctx,
 		`UPDATE knowledge SET embedding = $1, updated_at = $2 WHERE id = $3`,
 		pgvector.NewVector(embedding), time.Now().UTC(), id,
 	)
@@ -236,7 +240,7 @@ func (r *KnowledgeRepository) UpdateEmbedding(ctx context.Context, id string, em
 }
 
 func (r *KnowledgeRepository) CreateVersion(ctx context.Context, v *domain.KnowledgeVersion) error {
-	_, err := r.pool.Exec(ctx,
+	_, err := r.db.Exec(ctx,
 		`INSERT INTO knowledge_versions (id, knowledge_id, version_number, title, summary, body_md, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		v.ID, v.KnowledgeID, v.VersionNumber, v.Title, v.Summary, v.BodyMD, v.CreatedAt,
@@ -245,7 +249,7 @@ func (r *KnowledgeRepository) CreateVersion(ctx context.Context, v *domain.Knowl
 }
 
 func (r *KnowledgeRepository) GetVersions(ctx context.Context, knowledgeID string) ([]*domain.KnowledgeVersion, error) {
-	rows, err := r.pool.Query(ctx,
+	rows, err := r.db.Query(ctx,
 		`SELECT id, knowledge_id, version_number, title, summary, body_md, created_at
 		 FROM knowledge_versions WHERE knowledge_id = $1 ORDER BY version_number DESC`,
 		knowledgeID,
@@ -268,7 +272,7 @@ func (r *KnowledgeRepository) GetVersions(ctx context.Context, knowledgeID strin
 
 func (r *KnowledgeRepository) GetLatestVersion(ctx context.Context, knowledgeID string) (*domain.KnowledgeVersion, error) {
 	var v domain.KnowledgeVersion
-	err := r.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, knowledge_id, version_number, title, summary, body_md, created_at
 		 FROM knowledge_versions WHERE knowledge_id = $1 ORDER BY version_number DESC LIMIT 1`,
 		knowledgeID,

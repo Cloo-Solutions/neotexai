@@ -224,7 +224,8 @@ Generated {LEARNING_COUNT} learnings.
 ---
 
 **Next steps:**
-- `neotex search "<query>"` - Find specific knowledge
+- `neotex search "type:guideline <query>"` - Find specific knowledge (inline filters supported)
+- `neotex search "<query>" --source asset` - Find assets
 - `neotex pull` - Sync to local .neotex/index.json
 - Review and delete any unwanted learnings via web UI
 ```

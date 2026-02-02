@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/cloo-solutions/neotexai/internal/domain"
 )
@@ -16,7 +15,7 @@ const (
 
 // EmbeddingJobRepository defines the interface for embedding job persistence
 type EmbeddingJobRepository interface {
-	// GetPendingJobs retrieves all pending embedding jobs
+	// GetPendingJobs retrieves and claims pending embedding jobs
 	GetPendingJobs(ctx context.Context) ([]*domain.EmbeddingJob, error)
 
 	// UpdateJobStatus updates the status of an embedding job
@@ -25,8 +24,6 @@ type EmbeddingJobRepository interface {
 	// IncrementRetries increments the retry count for a job
 	IncrementRetries(ctx context.Context, jobID string) error
 
-	// MarkProcessed marks a job as processed with timestamp
-	MarkProcessed(ctx context.Context, jobID string, processedAt time.Time) error
 }
 
 // EmbeddingService defines the interface for generating embeddings
@@ -74,10 +71,6 @@ func (w *EmbeddingWorker) ProcessJobs(ctx context.Context) error {
 }
 
 func (w *EmbeddingWorker) processJob(ctx context.Context, job *domain.EmbeddingJob) error {
-	if err := w.repo.UpdateJobStatus(ctx, job.ID, domain.EmbeddingJobStatusProcessing, ""); err != nil {
-		return fmt.Errorf("failed to update job status to processing: %w", err)
-	}
-
 	var err error
 	if job.KnowledgeID != "" {
 		log.Printf("Processing job %s for knowledge %s", job.ID, job.KnowledgeID)
@@ -91,11 +84,6 @@ func (w *EmbeddingWorker) processJob(ctx context.Context, job *domain.EmbeddingJ
 
 	if err != nil {
 		return w.handleJobFailure(ctx, job, err)
-	}
-
-	now := time.Now()
-	if err := w.repo.MarkProcessed(ctx, job.ID, now); err != nil {
-		return fmt.Errorf("failed to mark job as processed: %w", err)
 	}
 
 	if err := w.repo.UpdateJobStatus(ctx, job.ID, domain.EmbeddingJobStatusCompleted, ""); err != nil {

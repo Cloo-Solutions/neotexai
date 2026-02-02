@@ -11,15 +11,19 @@ import (
 )
 
 type AssetRepository struct {
-	pool *pgxpool.Pool
+	db dbtx
 }
 
 func NewAssetRepository(pool *pgxpool.Pool) *AssetRepository {
-	return &AssetRepository{pool: pool}
+	return &AssetRepository{db: pool}
+}
+
+func NewAssetRepositoryWithTx(tx pgx.Tx) *AssetRepository {
+	return &AssetRepository{db: tx}
 }
 
 func (r *AssetRepository) Create(ctx context.Context, a *domain.Asset) error {
-	_, err := r.pool.Exec(ctx,
+	_, err := r.db.Exec(ctx,
 		`INSERT INTO assets (id, org_id, project_id, filename, mime_type, sha256, storage_key, keywords, description, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		a.ID, a.OrgID, nullableString(a.ProjectID), a.Filename, a.MimeType, a.SHA256, a.StorageKey, a.Keywords, a.Description, a.CreatedAt,
@@ -30,7 +34,7 @@ func (r *AssetRepository) Create(ctx context.Context, a *domain.Asset) error {
 func (r *AssetRepository) GetByID(ctx context.Context, id string) (*domain.Asset, error) {
 	var a domain.Asset
 	var projectID *string
-	err := r.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, org_id, project_id, filename, mime_type, sha256, storage_key, keywords, description, created_at
 		 FROM assets WHERE id = $1`,
 		id,
@@ -48,7 +52,7 @@ func (r *AssetRepository) GetByID(ctx context.Context, id string) (*domain.Asset
 }
 
 func (r *AssetRepository) ListByKnowledge(ctx context.Context, knowledgeID string) ([]*domain.Asset, error) {
-	rows, err := r.pool.Query(ctx,
+	rows, err := r.db.Query(ctx,
 		`SELECT a.id, a.org_id, a.project_id, a.filename, a.mime_type, a.sha256, a.storage_key, a.keywords, a.description, a.created_at
 		 FROM assets a
 		 INNER JOIN knowledge_assets ka ON a.id = ka.asset_id
@@ -77,7 +81,7 @@ func (r *AssetRepository) ListByKnowledge(ctx context.Context, knowledgeID strin
 }
 
 func (r *AssetRepository) Delete(ctx context.Context, id string) error {
-	cmdTag, err := r.pool.Exec(ctx,
+	cmdTag, err := r.db.Exec(ctx,
 		`DELETE FROM assets WHERE id = $1`,
 		id,
 	)
@@ -91,7 +95,7 @@ func (r *AssetRepository) Delete(ctx context.Context, id string) error {
 }
 
 func (r *AssetRepository) LinkToKnowledge(ctx context.Context, knowledgeID, assetID string) error {
-	_, err := r.pool.Exec(ctx,
+	_, err := r.db.Exec(ctx,
 		`INSERT INTO knowledge_assets (knowledge_id, asset_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		knowledgeID, assetID,
 	)
@@ -99,7 +103,7 @@ func (r *AssetRepository) LinkToKnowledge(ctx context.Context, knowledgeID, asse
 }
 
 func (r *AssetRepository) UnlinkFromKnowledge(ctx context.Context, knowledgeID, assetID string) error {
-	_, err := r.pool.Exec(ctx,
+	_, err := r.db.Exec(ctx,
 		`DELETE FROM knowledge_assets WHERE knowledge_id = $1 AND asset_id = $2`,
 		knowledgeID, assetID,
 	)
@@ -107,7 +111,7 @@ func (r *AssetRepository) UnlinkFromKnowledge(ctx context.Context, knowledgeID, 
 }
 
 func (r *AssetRepository) UpdateEmbedding(ctx context.Context, id string, embedding []float32) error {
-	_, err := r.pool.Exec(ctx,
+	_, err := r.db.Exec(ctx,
 		`UPDATE assets SET embedding = $1 WHERE id = $2`,
 		pgvector.NewVector(embedding), id,
 	)

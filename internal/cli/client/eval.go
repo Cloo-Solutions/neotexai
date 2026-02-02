@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 
@@ -14,6 +15,7 @@ type EvalCase struct {
 	ExpectedIDs []string `json:"expected_ids"`
 	ProjectID   string   `json:"project_id,omitempty"`
 	Type        string   `json:"type,omitempty"`
+	Category    string   `json:"category,omitempty"`
 }
 
 type EvalSuite struct {
@@ -22,26 +24,31 @@ type EvalSuite struct {
 }
 
 type EvalSummary struct {
-	Total      int     `json:"total"`
-	K          int     `json:"k"`
-	Limit      int     `json:"limit"`
-	RecallAtK  float64 `json:"recall_at_k"`
-	MRR        float64 `json:"mrr"`
-	HitRateAtK float64 `json:"hit_rate_at_k"`
+	Total         int     `json:"total"`
+	K             int     `json:"k"`
+	Limit         int     `json:"limit"`
+	RecallAtK     float64 `json:"recall_at_k"`
+	PrecisionAtK  float64 `json:"precision_at_k"`
+	NDCGAtK       float64 `json:"ndcg_at_k"`
+	MRR           float64 `json:"mrr"`
+	HitRateAtK    float64 `json:"hit_rate_at_k"`
 }
 
 type EvalCaseResult struct {
-	Query       string   `json:"query"`
-	ExpectedIDs []string `json:"expected_ids"`
-	FoundIDs    []string `json:"found_ids"`
-	Rank        int      `json:"rank"`
-	RecallAtK   float64  `json:"recall_at_k"`
-	RR          float64  `json:"rr"`
+	Query        string   `json:"query"`
+	ExpectedIDs  []string `json:"expected_ids"`
+	FoundIDs     []string `json:"found_ids"`
+	Rank         int      `json:"rank"`
+	RecallAtK    float64  `json:"recall_at_k"`
+	PrecisionAtK float64  `json:"precision_at_k"`
+	NDCGAtK      float64  `json:"ndcg_at_k"`
+	RR           float64  `json:"rr"`
 }
 
 type EvalOutput struct {
-	Summary EvalSummary      `json:"summary"`
-	Cases   []EvalCaseResult `json:"cases,omitempty"`
+	Summary    EvalSummary                `json:"summary"`
+	Categories map[string]EvalSummary     `json:"categories,omitempty"`
+	Cases      []EvalCaseResult           `json:"cases,omitempty"`
 }
 
 // EvalCmd creates the eval command.
@@ -119,11 +126,22 @@ func runEval(file string, limit, k int, verbose, outputJSON bool) error {
 	}
 
 	var (
-		sumRecall   float64
-		sumRR       float64
-		hitCount    int
-		caseResults []EvalCaseResult
+		sumRecall    float64
+		sumPrecision float64
+		sumNDCG      float64
+		sumRR        float64
+		hitCount     int
+		caseResults  []EvalCaseResult
 	)
+	type agg struct {
+		total        int
+		sumRecall    float64
+		sumPrecision float64
+		sumNDCG      float64
+		sumRR        float64
+		hitCount     int
+	}
+	categoryAgg := map[string]*agg{}
 
 	for _, c := range suite.Cases {
 		if c.Query == "" {
@@ -176,7 +194,32 @@ func runEval(file string, limit, k int, verbose, outputJSON bool) error {
 		}
 
 		recall := float64(hits) / float64(len(expectedSet))
+		precision := float64(hits) / float64(k)
+		dcg := 0.0
+		maxRank := k
+		if len(searchResp.Results) < maxRank {
+			maxRank = len(searchResp.Results)
+		}
+		for i := 0; i < maxRank; i++ {
+			if _, ok := expectedSet[searchResp.Results[i].ID]; ok {
+				dcg += 1.0 / math.Log2(float64(i)+2.0)
+			}
+		}
+		idcg := 0.0
+		ideal := len(expectedSet)
+		if ideal > k {
+			ideal = k
+		}
+		for i := 0; i < ideal; i++ {
+			idcg += 1.0 / math.Log2(float64(i)+2.0)
+		}
+		ndcg := 0.0
+		if idcg > 0 {
+			ndcg = dcg / idcg
+		}
 		sumRecall += recall
+		sumPrecision += precision
+		sumNDCG += ndcg
 		rr := 0.0
 		if rank > 0 {
 			rr = 1.0 / float64(rank)
@@ -184,29 +227,70 @@ func runEval(file string, limit, k int, verbose, outputJSON bool) error {
 			hitCount++
 		}
 
+		if c.Category != "" {
+			entry, ok := categoryAgg[c.Category]
+			if !ok {
+				entry = &agg{}
+				categoryAgg[c.Category] = entry
+			}
+			entry.total++
+			entry.sumRecall += recall
+			entry.sumPrecision += precision
+			entry.sumNDCG += ndcg
+			entry.sumRR += rr
+			if rank > 0 {
+				entry.hitCount++
+			}
+		}
+
 		if verbose || outputJSON {
 			caseResults = append(caseResults, EvalCaseResult{
-				Query:       c.Query,
-				ExpectedIDs: c.ExpectedIDs,
-				FoundIDs:    foundIDs,
-				Rank:        rank,
-				RecallAtK:   recall,
-				RR:          rr,
+				Query:        c.Query,
+				ExpectedIDs:  c.ExpectedIDs,
+				FoundIDs:     foundIDs,
+				Rank:         rank,
+				RecallAtK:    recall,
+				PrecisionAtK: precision,
+				NDCGAtK:      ndcg,
+				RR:           rr,
 			})
 		}
 	}
 
 	summary := EvalSummary{
-		Total:      len(suite.Cases),
-		K:          k,
-		Limit:      limit,
-		RecallAtK:  sumRecall / float64(len(suite.Cases)),
-		MRR:        sumRR / float64(len(suite.Cases)),
-		HitRateAtK: float64(hitCount) / float64(len(suite.Cases)),
+		Total:        len(suite.Cases),
+		K:            k,
+		Limit:        limit,
+		RecallAtK:    sumRecall / float64(len(suite.Cases)),
+		PrecisionAtK: sumPrecision / float64(len(suite.Cases)),
+		NDCGAtK:      sumNDCG / float64(len(suite.Cases)),
+		MRR:          sumRR / float64(len(suite.Cases)),
+		HitRateAtK:   float64(hitCount) / float64(len(suite.Cases)),
 	}
 
 	if outputJSON {
 		out := EvalOutput{Summary: summary}
+		if len(categoryAgg) > 0 {
+			categories := make(map[string]EvalSummary, len(categoryAgg))
+			for name, entry := range categoryAgg {
+				if entry.total == 0 {
+					continue
+				}
+				categories[name] = EvalSummary{
+					Total:        entry.total,
+					K:            k,
+					Limit:        limit,
+					RecallAtK:    entry.sumRecall / float64(entry.total),
+					PrecisionAtK: entry.sumPrecision / float64(entry.total),
+					NDCGAtK:      entry.sumNDCG / float64(entry.total),
+					MRR:          entry.sumRR / float64(entry.total),
+					HitRateAtK:   float64(entry.hitCount) / float64(entry.total),
+				}
+			}
+			if len(categories) > 0 {
+				out.Categories = categories
+			}
+		}
 		if verbose {
 			sort.Slice(caseResults, func(i, j int) bool {
 				return caseResults[i].Query < caseResults[j].Query
@@ -220,13 +304,15 @@ func runEval(file string, limit, k int, verbose, outputJSON bool) error {
 
 	fmt.Printf("Eval results (k=%d, limit=%d)\n", summary.K, summary.Limit)
 	fmt.Printf("Recall@%d: %.4f\n", summary.K, summary.RecallAtK)
+	fmt.Printf("Precision@%d: %.4f\n", summary.K, summary.PrecisionAtK)
+	fmt.Printf("nDCG@%d: %.4f\n", summary.K, summary.NDCGAtK)
 	fmt.Printf("MRR: %.4f\n", summary.MRR)
 	fmt.Printf("Hit@%d: %.4f\n", summary.K, summary.HitRateAtK)
 
 	if verbose {
 		for _, r := range caseResults {
 			fmt.Printf("\nQuery: %s\n", r.Query)
-			fmt.Printf("Rank: %d  Recall@%d: %.4f  RR: %.4f\n", r.Rank, summary.K, r.RecallAtK, r.RR)
+			fmt.Printf("Rank: %d  Recall@%d: %.4f  Precision@%d: %.4f  nDCG@%d: %.4f  RR: %.4f\n", r.Rank, summary.K, r.RecallAtK, summary.K, r.PrecisionAtK, summary.K, r.NDCGAtK, r.RR)
 			fmt.Printf("Expected: %v\n", r.ExpectedIDs)
 			fmt.Printf("Found: %v\n", r.FoundIDs)
 		}

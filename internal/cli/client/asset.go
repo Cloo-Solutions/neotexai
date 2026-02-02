@@ -225,6 +225,7 @@ func runAssetAdd(filePath, description string, keywords []string, knowledgeID st
 // AssetGetCmd creates the asset get command.
 func AssetGetCmd() *cobra.Command {
 	var outputPath string
+	var searchID string
 
 	cmd := &cobra.Command{
 		Use:   "get <asset_id>",
@@ -233,16 +234,17 @@ func AssetGetCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			outputJSON, _ := cmd.Flags().GetBool("output")
-			return runAssetGet(args[0], outputPath, outputJSON)
+			return runAssetGet(args[0], outputPath, outputJSON, searchID)
 		},
 	}
 
 	cmd.Flags().StringVarP(&outputPath, "dest", "o", "", "Output file path (default: current directory with original filename)")
+	cmd.Flags().StringVar(&searchID, "search-id", "", "Associate this selection with a search ID")
 
 	return cmd
 }
 
-func runAssetGet(assetID, outputPath string, outputJSON bool) error {
+func runAssetGet(assetID, outputPath string, outputJSON bool, searchID string) error {
 	// Create API client
 	api, err := NewAPIClient()
 	if err != nil {
@@ -278,6 +280,8 @@ func runAssetGet(assetID, outputPath string, outputJSON bool) error {
 	if err := api.DownloadFile(downloadResp.DownloadURL, outputPath); err != nil {
 		return fmt.Errorf("failed to download asset: %w", err)
 	}
+
+	_ = sendSearchFeedback(api, searchID, assetID, "asset")
 
 	if outputJSON {
 		result := map[string]interface{}{

@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/cloo-solutions/neotexai/internal/domain"
 	"github.com/cloo-solutions/neotexai/internal/service"
@@ -56,31 +58,116 @@ func (r *ContextRepository) GetManifest(ctx context.Context, orgID, projectID st
 	return results, rows.Err()
 }
 
-func (r *ContextRepository) SearchByEmbedding(ctx context.Context, embedding []float32, filters service.SearchFilters, limit int) ([]*service.SearchResult, error) {
+func (r *ContextRepository) SearchKnowledgeChunksSemantic(ctx context.Context, embedding []float32, filters service.SearchFilters, limit int) ([]*service.ChunkSearchResult, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 
 	vec := pgvector.NewVector(embedding)
+	args := []interface{}{vec}
+	argIdx := 2
 
-	query := `
-		WITH combined AS (
-			SELECT id, title, summary, scope_path, 'knowledge' as source_type,
-			       1.0 / (1.0 + (embedding <=> $1)) AS score
-			FROM knowledge
-			WHERE org_id = $2 AND embedding IS NOT NULL
-			UNION ALL
-			SELECT id, filename as title, description as summary, NULL as scope_path, 'asset' as source_type,
-			       1.0 / (1.0 + (embedding <=> $1)) AS score
-			FROM assets
-			WHERE org_id = $2 AND embedding IS NOT NULL
-		)
-		SELECT id, title, summary, scope_path, source_type, score
-		FROM combined
+	where := []string{"embedding IS NOT NULL"}
+	where = append(where, buildKnowledgeFilters(filters, &args, &argIdx, "")...)
+
+	query := fmt.Sprintf(`
+		SELECT knowledge_id, title, summary, scope_path, content, updated_at,
+		       1.0 / (1.0 + (embedding <=> $1)) AS score
+		FROM knowledge_chunks
+		WHERE %s
+		ORDER BY embedding <=> $1
+		LIMIT $%d`, strings.Join(where, " AND "), argIdx)
+
+	args = append(args, limit)
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := make([]*service.ChunkSearchResult, 0)
+	for rows.Next() {
+		var result service.ChunkSearchResult
+		var scope *string
+		if err := rows.Scan(&result.KnowledgeID, &result.Title, &result.Summary, &scope, &result.Content, &result.UpdatedAt, &result.Score); err != nil {
+			return nil, err
+		}
+		if scope != nil {
+			result.Scope = *scope
+		}
+		results = append(results, &result)
+	}
+
+	return results, rows.Err()
+}
+
+func (r *ContextRepository) SearchKnowledgeChunksLexical(ctx context.Context, queryText string, filters service.SearchFilters, limit int) ([]*service.ChunkSearchResult, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	args := []interface{}{queryText}
+	argIdx := 2
+
+	where := []string{"search_tsv @@ websearch_to_tsquery('english', $1)"}
+	where = append(where, buildKnowledgeFilters(filters, &args, &argIdx, "")...)
+
+	query := fmt.Sprintf(`
+		SELECT knowledge_id, title, summary, scope_path, content, updated_at,
+		       ts_rank_cd(search_tsv, websearch_to_tsquery('english', $1)) AS score
+		FROM knowledge_chunks
+		WHERE %s
 		ORDER BY score DESC
-		LIMIT $3`
+		LIMIT $%d`, strings.Join(where, " AND "), argIdx)
 
-	rows, err := r.pool.Query(ctx, query, vec, filters.OrgID, limit)
+	args = append(args, limit)
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := make([]*service.ChunkSearchResult, 0)
+	for rows.Next() {
+		var result service.ChunkSearchResult
+		var scope *string
+		if err := rows.Scan(&result.KnowledgeID, &result.Title, &result.Summary, &scope, &result.Content, &result.UpdatedAt, &result.Score); err != nil {
+			return nil, err
+		}
+		if scope != nil {
+			result.Scope = *scope
+		}
+		results = append(results, &result)
+	}
+
+	return results, rows.Err()
+}
+
+func (r *ContextRepository) SearchKnowledgeSemantic(ctx context.Context, embedding []float32, filters service.SearchFilters, limit int) ([]*service.SearchResult, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	vec := pgvector.NewVector(embedding)
+	args := []interface{}{vec}
+	argIdx := 2
+
+	where := []string{"embedding IS NOT NULL"}
+	where = append(where, buildKnowledgeFilters(filters, &args, &argIdx, "")...)
+
+	query := fmt.Sprintf(`
+		SELECT id, title, summary, scope_path, updated_at,
+		       1.0 / (1.0 + (embedding <=> $1)) AS score
+		FROM knowledge
+		WHERE %s
+		ORDER BY embedding <=> $1
+		LIMIT $%d`, strings.Join(where, " AND "), argIdx)
+
+	args = append(args, limit)
+
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -89,16 +176,139 @@ func (r *ContextRepository) SearchByEmbedding(ctx context.Context, embedding []f
 	results := make([]*service.SearchResult, 0)
 	for rows.Next() {
 		var result service.SearchResult
-		var scope, sourceType *string
-		if err := rows.Scan(&result.ID, &result.Title, &result.Summary, &scope, &sourceType, &result.Score); err != nil {
+		var scope *string
+		if err := rows.Scan(&result.ID, &result.Title, &result.Summary, &scope, &result.UpdatedAt, &result.Score); err != nil {
 			return nil, err
 		}
 		if scope != nil {
 			result.Scope = *scope
 		}
-		if sourceType != nil && *sourceType == "asset" {
-			result.Scope = "asset"
+		result.SourceType = "knowledge"
+		results = append(results, &result)
+	}
+
+	return results, rows.Err()
+}
+
+func (r *ContextRepository) SearchKnowledgeLexical(ctx context.Context, queryText string, filters service.SearchFilters, limit int) ([]*service.SearchResult, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	args := []interface{}{queryText}
+	argIdx := 2
+
+	where := []string{"search_tsv @@ websearch_to_tsquery('english', $1)"}
+	where = append(where, buildKnowledgeFilters(filters, &args, &argIdx, "")...)
+
+	query := fmt.Sprintf(`
+		SELECT id, title, summary, scope_path, updated_at,
+		       ts_rank_cd(search_tsv, websearch_to_tsquery('english', $1)) AS score
+		FROM knowledge
+		WHERE %s
+		ORDER BY score DESC
+		LIMIT $%d`, strings.Join(where, " AND "), argIdx)
+
+	args = append(args, limit)
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := make([]*service.SearchResult, 0)
+	for rows.Next() {
+		var result service.SearchResult
+		var scope *string
+		if err := rows.Scan(&result.ID, &result.Title, &result.Summary, &scope, &result.UpdatedAt, &result.Score); err != nil {
+			return nil, err
 		}
+		if scope != nil {
+			result.Scope = *scope
+		}
+		result.SourceType = "knowledge"
+		results = append(results, &result)
+	}
+
+	return results, rows.Err()
+}
+
+func (r *ContextRepository) SearchAssetsSemantic(ctx context.Context, embedding []float32, filters service.SearchFilters, limit int) ([]*service.SearchResult, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	vec := pgvector.NewVector(embedding)
+	args := []interface{}{vec}
+	argIdx := 2
+
+	where := []string{"embedding IS NOT NULL"}
+	where = append(where, buildAssetFilters(filters, &args, &argIdx, "")...)
+
+	query := fmt.Sprintf(`
+		SELECT id, filename as title, description as summary, created_at,
+		       1.0 / (1.0 + (embedding <=> $1)) AS score
+		FROM assets
+		WHERE %s
+		ORDER BY embedding <=> $1
+		LIMIT $%d`, strings.Join(where, " AND "), argIdx)
+
+	args = append(args, limit)
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := make([]*service.SearchResult, 0)
+	for rows.Next() {
+		var result service.SearchResult
+		if err := rows.Scan(&result.ID, &result.Title, &result.Summary, &result.UpdatedAt, &result.Score); err != nil {
+			return nil, err
+		}
+		result.SourceType = "asset"
+		results = append(results, &result)
+	}
+
+	return results, rows.Err()
+}
+
+func (r *ContextRepository) SearchAssetsLexical(ctx context.Context, queryText string, filters service.SearchFilters, limit int) ([]*service.SearchResult, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	args := []interface{}{queryText}
+	argIdx := 2
+
+	where := []string{"search_tsv @@ websearch_to_tsquery('english', $1)"}
+	where = append(where, buildAssetFilters(filters, &args, &argIdx, "")...)
+
+	query := fmt.Sprintf(`
+		SELECT id, filename as title, description as summary, created_at,
+		       ts_rank_cd(search_tsv, websearch_to_tsquery('english', $1)) AS score
+		FROM assets
+		WHERE %s
+		ORDER BY score DESC
+		LIMIT $%d`, strings.Join(where, " AND "), argIdx)
+
+	args = append(args, limit)
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := make([]*service.SearchResult, 0)
+	for rows.Next() {
+		var result service.SearchResult
+		if err := rows.Scan(&result.ID, &result.Title, &result.Summary, &result.UpdatedAt, &result.Score); err != nil {
+			return nil, err
+		}
+		result.SourceType = "asset"
 		results = append(results, &result)
 	}
 
@@ -121,4 +331,92 @@ func (r *ContextRepository) GetByIDs(ctx context.Context, ids []string) ([]*doma
 	defer rows.Close()
 
 	return scanKnowledgeRows(rows)
+}
+
+func (r *ContextRepository) GetAssetsByIDs(ctx context.Context, ids []string) ([]*domain.Asset, error) {
+	if len(ids) == 0 {
+		return []*domain.Asset{}, nil
+	}
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, org_id, project_id, filename, mime_type, sha256, storage_key, keywords, description, created_at
+		 FROM assets WHERE id = ANY($1)`,
+		ids,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var assets []*domain.Asset
+	for rows.Next() {
+		var a domain.Asset
+		var projectID *string
+		if err := rows.Scan(&a.ID, &a.OrgID, &projectID, &a.Filename, &a.MimeType, &a.SHA256, &a.StorageKey, &a.Keywords, &a.Description, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		if projectID != nil {
+			a.ProjectID = *projectID
+		}
+		assets = append(assets, &a)
+	}
+
+	return assets, rows.Err()
+}
+
+func buildKnowledgeFilters(filters service.SearchFilters, args *[]interface{}, argIdx *int, tableAlias string) []string {
+	where := []string{}
+	column := func(name string) string {
+		if tableAlias == "" {
+			return name
+		}
+		return tableAlias + "." + name
+	}
+
+	where = append(where, fmt.Sprintf("%s = $%d", column("org_id"), *argIdx))
+	*args = append(*args, filters.OrgID)
+	*argIdx++
+
+	if filters.ProjectID != "" {
+		where = append(where, fmt.Sprintf("%s = $%d", column("project_id"), *argIdx))
+		*args = append(*args, filters.ProjectID)
+		*argIdx++
+	}
+	if filters.Type != "" {
+		where = append(where, fmt.Sprintf("%s = $%d", column("type"), *argIdx))
+		*args = append(*args, filters.Type)
+		*argIdx++
+	}
+	if filters.Status != "" {
+		where = append(where, fmt.Sprintf("%s = $%d", column("status"), *argIdx))
+		*args = append(*args, filters.Status)
+		*argIdx++
+	}
+	if filters.PathPrefix != "" {
+		where = append(where, fmt.Sprintf("%s LIKE $%d", column("scope_path"), *argIdx))
+		*args = append(*args, filters.PathPrefix+"%")
+		*argIdx++
+	}
+	return where
+}
+
+func buildAssetFilters(filters service.SearchFilters, args *[]interface{}, argIdx *int, tableAlias string) []string {
+	where := []string{}
+	column := func(name string) string {
+		if tableAlias == "" {
+			return name
+		}
+		return tableAlias + "." + name
+	}
+
+	where = append(where, fmt.Sprintf("%s = $%d", column("org_id"), *argIdx))
+	*args = append(*args, filters.OrgID)
+	*argIdx++
+
+	if filters.ProjectID != "" {
+		where = append(where, fmt.Sprintf("%s = $%d", column("project_id"), *argIdx))
+		*args = append(*args, filters.ProjectID)
+		*argIdx++
+	}
+	return where
 }

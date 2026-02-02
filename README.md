@@ -58,11 +58,16 @@ neotex init --api-key <your-key>
 # Pull knowledge manifest
 neotex pull
 
-# Search knowledge
+# Search knowledge and assets (hybrid by default)
 neotex search "how to deploy"
 
-# Get specific item
-neotex get <id>
+# Search with filters (inline or flags)
+neotex search "type:guideline status:active path:backend how to deploy"
+neotex search "login mockup" --source asset --mode lexical --limit 10
+neotex search "postgres migration" --exact
+
+# Get specific item (optionally link to search for feedback)
+neotex get <id> --search-id <search_id>
 ```
 
 ## Configuration
@@ -73,6 +78,7 @@ neotex get <id>
 |----------|----------|-------------|
 | `NEOTEX_DATABASE_URL` | Yes | PostgreSQL connection string |
 | `NEOTEX_OPENAI_API_KEY` | Yes | OpenAI API key for embeddings |
+| `NEOTEX_EMBEDDING_WORKERS` | No | Number of embedding workers to run (default: 1) |
 | `NEOTEX_S3_ENDPOINT` | No | S3-compatible storage endpoint |
 | `NEOTEX_S3_BUCKET` | No | Bucket name for assets |
 | `SENTRY_DSN` | No | Sentry DSN for error tracking |

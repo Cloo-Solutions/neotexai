@@ -49,6 +49,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.False(t, cfg.Debug)
 	assert.Equal(t, "neotex-assets", cfg.S3Bucket)
 	assert.Equal(t, "us-east-1", cfg.S3Region)
+	assert.Equal(t, 1, cfg.EmbeddingWorkers)
 }
 
 func TestLoad_RequiredDatabaseURL(t *testing.T) {

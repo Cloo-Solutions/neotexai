@@ -36,7 +36,7 @@ func (m *MockContextService) Search(ctx context.Context, input service.SearchInp
 
 func TestContextHandler_GetManifest_Success(t *testing.T) {
 	mockSvc := new(MockContextService)
-	handler := NewContextHandler(mockSvc)
+	handler := NewContextHandler(mockSvc, nil)
 
 	expectedItems := []*service.KnowledgeManifestItem{
 		{ID: "k-1", Title: "Guideline 1", Summary: "Summary 1", Type: domain.KnowledgeTypeGuideline, Scope: "src/"},
@@ -61,7 +61,7 @@ func TestContextHandler_GetManifest_Success(t *testing.T) {
 
 func TestContextHandler_GetManifest_WithProjectID(t *testing.T) {
 	mockSvc := new(MockContextService)
-	handler := NewContextHandler(mockSvc)
+	handler := NewContextHandler(mockSvc, nil)
 
 	expectedItems := []*service.KnowledgeManifestItem{
 		{ID: "k-1", Title: "Guideline 1", Summary: "Summary 1", Type: domain.KnowledgeTypeGuideline},
@@ -79,7 +79,7 @@ func TestContextHandler_GetManifest_WithProjectID(t *testing.T) {
 
 func TestContextHandler_GetManifest_Unauthorized(t *testing.T) {
 	mockSvc := new(MockContextService)
-	handler := NewContextHandler(mockSvc)
+	handler := NewContextHandler(mockSvc, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/context", nil)
 	w := httptest.NewRecorder()
@@ -91,7 +91,7 @@ func TestContextHandler_GetManifest_Unauthorized(t *testing.T) {
 
 func TestContextHandler_Search_Success(t *testing.T) {
 	mockSvc := new(MockContextService)
-	handler := NewContextHandler(mockSvc)
+	handler := NewContextHandler(mockSvc, nil)
 
 	expectedOutput := &service.SearchOutput{
 		Results: []*service.SearchResult{
@@ -122,7 +122,7 @@ func TestContextHandler_Search_Success(t *testing.T) {
 
 func TestContextHandler_Search_WithTypeFilter(t *testing.T) {
 	mockSvc := new(MockContextService)
-	handler := NewContextHandler(mockSvc)
+	handler := NewContextHandler(mockSvc, nil)
 
 	expectedOutput := &service.SearchOutput{
 		Results: []*service.SearchResult{
@@ -146,7 +146,7 @@ func TestContextHandler_Search_WithTypeFilter(t *testing.T) {
 
 func TestContextHandler_Search_CustomLimit(t *testing.T) {
 	mockSvc := new(MockContextService)
-	handler := NewContextHandler(mockSvc)
+	handler := NewContextHandler(mockSvc, nil)
 
 	mockSvc.On("Search", mock.Anything, mock.MatchedBy(func(input service.SearchInput) bool {
 		return input.Limit == 5
@@ -164,7 +164,7 @@ func TestContextHandler_Search_CustomLimit(t *testing.T) {
 
 func TestContextHandler_Search_MissingQuery(t *testing.T) {
 	mockSvc := new(MockContextService)
-	handler := NewContextHandler(mockSvc)
+	handler := NewContextHandler(mockSvc, nil)
 
 	body := `{"project_id":"proj-789"}`
 	req := requestWithOrgID(http.MethodPost, "/search", []byte(body))
@@ -178,7 +178,7 @@ func TestContextHandler_Search_MissingQuery(t *testing.T) {
 
 func TestContextHandler_Search_Unauthorized(t *testing.T) {
 	mockSvc := new(MockContextService)
-	handler := NewContextHandler(mockSvc)
+	handler := NewContextHandler(mockSvc, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/search", nil)
 	w := httptest.NewRecorder()

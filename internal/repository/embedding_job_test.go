@@ -144,6 +144,39 @@ func TestEmbeddingJobRepository_GetPending_WithLimit(t *testing.T) {
 	assert.Len(t, pending, 2)
 }
 
+func TestEmbeddingJobRepository_ClaimPending(t *testing.T) {
+	ctx := context.Background()
+	pc := testutil.NewPostgresContainer(ctx, t)
+	defer pc.Terminate(ctx)
+
+	pool := testutil.NewTestPool(ctx, t, pc, "../../migrations")
+	defer pool.Close()
+
+	orgRepo := NewOrgRepository(pool)
+	knowledgeRepo := NewKnowledgeRepository(pool)
+	jobRepo := NewEmbeddingJobRepository(pool)
+
+	k := setupKnowledgeForEmbeddingJob(ctx, t, orgRepo, knowledgeRepo)
+
+	job1 := &domain.EmbeddingJob{ID: uuid.NewString(), KnowledgeID: k.ID, Status: domain.EmbeddingJobStatusPending, CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
+	job2 := &domain.EmbeddingJob{ID: uuid.NewString(), KnowledgeID: k.ID, Status: domain.EmbeddingJobStatusPending, CreatedAt: time.Now().UTC().Add(time.Second).Truncate(time.Microsecond)}
+	job3 := &domain.EmbeddingJob{ID: uuid.NewString(), KnowledgeID: k.ID, Status: domain.EmbeddingJobStatusProcessing, CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
+
+	require.NoError(t, jobRepo.Create(ctx, job1))
+	require.NoError(t, jobRepo.Create(ctx, job2))
+	require.NoError(t, jobRepo.Create(ctx, job3))
+
+	claimed, err := jobRepo.ClaimPending(ctx, 2)
+	require.NoError(t, err)
+	assert.Len(t, claimed, 2)
+
+	for _, job := range claimed {
+		retrieved, err := jobRepo.GetByID(ctx, job.ID)
+		require.NoError(t, err)
+		assert.Equal(t, domain.EmbeddingJobStatusProcessing, retrieved.Status)
+	}
+}
+
 func TestEmbeddingJobRepository_UpdateStatus(t *testing.T) {
 	ctx := context.Background()
 	pc := testutil.NewPostgresContainer(ctx, t)

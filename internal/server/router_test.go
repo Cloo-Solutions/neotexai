@@ -166,7 +166,7 @@ func setupRouter() (http.Handler, *MockAuthValidator, *MockKnowledgeService, *Mo
 		AuthValidator:    authValidator,
 		KnowledgeHandler: handlers.NewKnowledgeHandler(knowledgeSvc),
 		AssetHandler:     handlers.NewAssetHandler(assetSvc),
-		ContextHandler:   handlers.NewContextHandler(contextSvc),
+		ContextHandler:   handlers.NewContextHandler(contextSvc, nil),
 		AuthHandler:      handlers.NewAuthHandler(authSvc),
 	}
 
@@ -207,6 +207,7 @@ func TestRouter_AuthenticatedRoutes_RequireAuth(t *testing.T) {
 		{http.MethodGet, "/assets/123/download"},
 		{http.MethodGet, "/context"},
 		{http.MethodPost, "/search"},
+		{http.MethodPost, "/search/feedback"},
 	}
 
 	for _, route := range routes {

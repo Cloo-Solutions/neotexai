@@ -102,12 +102,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	knowledgeRepo := repository.NewKnowledgeRepository(pool)
+	knowledgeChunkRepo := repository.NewKnowledgeChunkRepository(pool)
 	embeddingJobRepo := repository.NewEmbeddingJobRepository(pool)
 	assetRepo := repository.NewAssetRepository(pool)
 	orgRepo := repository.NewOrgRepository(pool)
 	apiKeyRepo := repository.NewAPIKeyRepository(pool)
 	contextRepo := repository.NewContextRepository(pool)
+	searchLogRepo := repository.NewSearchLogRepository(pool)
 	projectRepo := repository.NewProjectRepository(pool)
+	txRunner := repository.NewTxRunner(pool)
 
 	if cfg.InitOrgName != "" {
 		if err := bootstrapInitialOrg(ctx, cfg, orgRepo, apiKeyRepo); err != nil {
@@ -137,22 +140,29 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	var embeddingClient service.EmbeddingClient
-	var embeddingWorker *jobs.Worker
+	var embeddingWorkers []*jobs.Worker
 	if cfg.HasOpenAI() {
 		embeddingClient = openai.NewClient(cfg.OpenAIAPIKey)
-		embeddingSvc := service.NewEmbeddingServiceWithAssets(embeddingClient, knowledgeRepo, assetRepo)
+		embeddingSvc := service.NewEmbeddingServiceWithAssetsAndChunks(embeddingClient, knowledgeRepo, assetRepo, knowledgeChunkRepo)
 		embeddingProcessor := jobs.NewEmbeddingWorker(embeddingJobRepo, embeddingSvc)
-		embeddingWorker = jobs.NewWorker(embeddingProcessor, 10*time.Second)
-		go embeddingWorker.Start(ctx)
-		log.Println("embedding worker started")
+		workerCount := cfg.EmbeddingWorkers
+		if workerCount <= 0 {
+			workerCount = 1
+		}
+		for i := 0; i < workerCount; i++ {
+			worker := jobs.NewWorker(embeddingProcessor, 10*time.Second)
+			embeddingWorkers = append(embeddingWorkers, worker)
+			go worker.Start(ctx)
+		}
+		log.Printf("embedding workers started: %d", workerCount)
 	}
 
 	uuidGen := &service.DefaultUUIDGenerator{}
 
-	knowledgeSvc := service.NewKnowledgeService(knowledgeRepo, embeddingJobRepo)
+	knowledgeSvc := service.NewKnowledgeServiceWithTx(knowledgeRepo, embeddingJobRepo, txRunner)
 	var assetSvc *service.AssetService
 	if storageClient != nil {
-		assetSvc = service.NewAssetServiceWithEmbeddings(assetRepo, storageClient, embeddingJobRepo)
+		assetSvc = service.NewAssetServiceWithEmbeddingsAndTx(assetRepo, storageClient, embeddingJobRepo, txRunner)
 	}
 	authSvc := service.NewAuthService(orgRepo, apiKeyRepo, uuidGen)
 
@@ -168,9 +178,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	var contextHandler *handlers.ContextHandler
 	if embeddingClient != nil {
-		contextHandler = handlers.NewContextHandler(service.NewContextService(contextRepo, embeddingClient))
+		contextHandler = handlers.NewContextHandler(service.NewContextService(contextRepo, embeddingClient), searchLogRepo)
 	} else {
-		contextHandler = handlers.NewContextHandler(&NoOpContextService{})
+		contextHandler = handlers.NewContextHandler(&NoOpContextService{}, searchLogRepo)
 	}
 
 	routerCfg := server.RouterConfig{
@@ -201,8 +211,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 	<-quit
 	log.Println("shutting down...")
 
-	if embeddingWorker != nil {
-		embeddingWorker.Stop()
+	if len(embeddingWorkers) > 0 {
+		for _, worker := range embeddingWorkers {
+			worker.Stop()
+		}
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)

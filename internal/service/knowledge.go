@@ -53,6 +53,7 @@ type KnowledgeService struct {
 	knowledgeRepo    KnowledgeRepositoryInterface
 	embeddingJobRepo EmbeddingJobRepositoryInterface
 	uuidGen          UUIDGenerator
+	txRunner         TxRunner
 }
 
 // NewKnowledgeService creates a new KnowledgeService instance
@@ -60,11 +61,7 @@ func NewKnowledgeService(
 	knowledgeRepo KnowledgeRepositoryInterface,
 	embeddingJobRepo EmbeddingJobRepositoryInterface,
 ) *KnowledgeService {
-	return &KnowledgeService{
-		knowledgeRepo:    knowledgeRepo,
-		embeddingJobRepo: embeddingJobRepo,
-		uuidGen:          &DefaultUUIDGenerator{},
-	}
+	return NewKnowledgeServiceWithTx(knowledgeRepo, embeddingJobRepo, nil)
 }
 
 // NewKnowledgeServiceWithUUIDGen creates a new KnowledgeService with custom UUID generator (for testing)
@@ -77,6 +74,21 @@ func NewKnowledgeServiceWithUUIDGen(
 		knowledgeRepo:    knowledgeRepo,
 		embeddingJobRepo: embeddingJobRepo,
 		uuidGen:          uuidGen,
+		txRunner:         nil,
+	}
+}
+
+// NewKnowledgeServiceWithTx creates a new KnowledgeService with transaction support.
+func NewKnowledgeServiceWithTx(
+	knowledgeRepo KnowledgeRepositoryInterface,
+	embeddingJobRepo EmbeddingJobRepositoryInterface,
+	txRunner TxRunner,
+) *KnowledgeService {
+	return &KnowledgeService{
+		knowledgeRepo:    knowledgeRepo,
+		embeddingJobRepo: embeddingJobRepo,
+		uuidGen:          &DefaultUUIDGenerator{},
+		txRunner:         txRunner,
 	}
 }
 
@@ -148,11 +160,6 @@ func (s *KnowledgeService) Create(ctx context.Context, input CreateInput) (*doma
 	}
 
 	// Create knowledge in repository
-	if err := s.knowledgeRepo.Create(ctx, knowledge); err != nil {
-		return nil, err
-	}
-
-	// Create first version
 	version := &domain.KnowledgeVersion{
 		ID:            versionID,
 		KnowledgeID:   knowledgeID,
@@ -161,10 +168,6 @@ func (s *KnowledgeService) Create(ctx context.Context, input CreateInput) (*doma
 		Summary:       input.Summary,
 		BodyMD:        input.BodyMD,
 		CreatedAt:     now,
-	}
-
-	if err := s.knowledgeRepo.CreateVersion(ctx, version); err != nil {
-		return nil, err
 	}
 
 	// Queue embedding job
@@ -176,6 +179,36 @@ func (s *KnowledgeService) Create(ctx context.Context, input CreateInput) (*doma
 		Error:       "",
 		CreatedAt:   now,
 		ProcessedAt: nil,
+	}
+
+	if s.txRunner != nil {
+		if err := s.txRunner.WithTx(ctx, func(repos TxRepositories) error {
+			knowledgeRepo := repos.Knowledge()
+			embeddingJobRepo := repos.EmbeddingJobs()
+
+			if err := knowledgeRepo.Create(ctx, knowledge); err != nil {
+				return err
+			}
+			if err := knowledgeRepo.CreateVersion(ctx, version); err != nil {
+				return err
+			}
+			if err := embeddingJobRepo.Create(ctx, job); err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		return knowledge, nil
+	}
+
+	// Create knowledge in repository
+	if err := s.knowledgeRepo.Create(ctx, knowledge); err != nil {
+		return nil, err
+	}
+
+	if err := s.knowledgeRepo.CreateVersion(ctx, version); err != nil {
+		return nil, err
 	}
 
 	if err := s.embeddingJobRepo.Create(ctx, job); err != nil {
@@ -210,6 +243,83 @@ func (s *KnowledgeService) Update(ctx context.Context, input UpdateInput) (*doma
 	defer span.End()
 
 	now := time.Now().UTC()
+
+	if s.txRunner != nil {
+		var updatedKnowledge *domain.Knowledge
+		var newVersion *domain.KnowledgeVersion
+
+		if err := s.txRunner.WithTx(ctx, func(repos TxRepositories) error {
+			knowledgeRepo := repos.Knowledge()
+			embeddingJobRepo := repos.EmbeddingJobs()
+
+			// Get existing knowledge
+			knowledge, err := knowledgeRepo.GetByID(ctx, input.KnowledgeID)
+			if err != nil {
+				return err
+			}
+
+			// Cannot modify deprecated knowledge
+			if knowledge.Status == domain.KnowledgeStatusDeprecated {
+				return domain.ErrCannotModifyDeprecated
+			}
+
+			// Get the latest version to determine next version number
+			latestVersion, err := knowledgeRepo.GetLatestVersion(ctx, input.KnowledgeID)
+			if err != nil {
+				return err
+			}
+
+			// Update knowledge record
+			knowledge.Title = input.Title
+			knowledge.Summary = input.Summary
+			knowledge.BodyMD = input.BodyMD
+			knowledge.Scope = input.Scope
+			knowledge.UpdatedAt = now
+
+			if err := knowledgeRepo.Update(ctx, knowledge); err != nil {
+				return err
+			}
+
+			// Create new version (immutable)
+			versionID := s.uuidGen.NewString()
+			newVersion = &domain.KnowledgeVersion{
+				ID:            versionID,
+				KnowledgeID:   input.KnowledgeID,
+				VersionNumber: latestVersion.VersionNumber + 1,
+				Title:         input.Title,
+				Summary:       input.Summary,
+				BodyMD:        input.BodyMD,
+				CreatedAt:     now,
+			}
+
+			if err := knowledgeRepo.CreateVersion(ctx, newVersion); err != nil {
+				return err
+			}
+
+			// Queue embedding job
+			jobID := s.uuidGen.NewString()
+			job := &domain.EmbeddingJob{
+				ID:          jobID,
+				KnowledgeID: input.KnowledgeID,
+				Status:      domain.EmbeddingJobStatusPending,
+				Retries:     0,
+				Error:       "",
+				CreatedAt:   now,
+				ProcessedAt: nil,
+			}
+
+			if err := embeddingJobRepo.Create(ctx, job); err != nil {
+				return err
+			}
+
+			updatedKnowledge = knowledge
+			return nil
+		}); err != nil {
+			return nil, nil, err
+		}
+
+		return updatedKnowledge, newVersion, nil
+	}
 
 	// Get existing knowledge
 	knowledge, err := s.knowledgeRepo.GetByID(ctx, input.KnowledgeID)

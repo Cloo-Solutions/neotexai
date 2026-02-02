@@ -24,21 +24,26 @@ type Knowledge struct {
 
 // GetCmd creates the get command.
 func GetCmd() *cobra.Command {
+	var searchID string
+
 	cmd := &cobra.Command{
-		Use:   "get <knowledge_id>",
-		Short: "Get a knowledge item by ID",
-		Long:  "Retrieves a knowledge item by its ID and displays the full content.",
-		Args:  cobra.ExactArgs(1),
+		Use:     "get <knowledge_id>",
+		Short:   "Get a knowledge item by ID",
+		Long:    "Retrieves a knowledge item by its ID and displays the full content.",
+		Aliases: []string{"view"},
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			outputJSON, _ := cmd.Flags().GetBool("output")
-			return runGet(args[0], outputJSON)
+			return runGet(args[0], outputJSON, searchID)
 		},
 	}
+
+	cmd.Flags().StringVar(&searchID, "search-id", "", "Associate this selection with a search ID")
 
 	return cmd
 }
 
-func runGet(knowledgeID string, outputJSON bool) error {
+func runGet(knowledgeID string, outputJSON bool, searchID string) error {
 	// Create API client
 	api, err := NewAPIClient()
 	if err != nil {
@@ -56,6 +61,8 @@ func runGet(knowledgeID string, outputJSON bool) error {
 	if err := json.Unmarshal(resp.Data, &knowledge); err != nil {
 		return fmt.Errorf("failed to parse knowledge: %w", err)
 	}
+
+	_ = sendSearchFeedback(api, searchID, knowledgeID, "knowledge")
 
 	if outputJSON {
 		output, _ := json.MarshalIndent(knowledge, "", "  ")

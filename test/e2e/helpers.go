@@ -156,19 +156,8 @@ func (e *E2ETestEnv) Bootstrap() {
 	e.APIKeyID = keyData.ID
 	e.APIKeyToken = keyData.Token
 
-	// Fetch the key ID from database (we need the actual key ID for token format)
-	rows, err := e.Pool.Query(e.Ctx, "SELECT id FROM api_keys WHERE org_id = $1 ORDER BY created_at DESC LIMIT 1", e.OrgID)
-	if err != nil {
-		e.T.Fatalf("failed to query API key: %v", err)
-	}
-	defer rows.Close()
-	if rows.Next() {
-		if err := rows.Scan(&e.APIKeyID); err != nil {
-			e.T.Fatalf("failed to scan API key ID: %v", err)
-		}
-	}
-
-	e.AuthToken = fmt.Sprintf("%s.%s", e.APIKeyID, e.APIKeyToken)
+	// Token format is ntx_<64 hex chars> - use directly for authentication
+	e.AuthToken = e.APIKeyToken
 }
 
 // BuildBinaries builds the neotex and neotexd binaries
@@ -344,6 +333,7 @@ func startServer(t *testing.T, pool *pgxpool.Pool, s3Client *storage.S3Client, p
 	assetRepo := repository.NewAssetRepository(pool)
 	orgRepo := repository.NewOrgRepository(pool)
 	apiKeyRepo := repository.NewAPIKeyRepository(pool)
+	projectRepo := repository.NewProjectRepository(pool)
 
 	// Initialize services
 	uuidGen := &service.DefaultUUIDGenerator{}
@@ -355,7 +345,8 @@ func startServer(t *testing.T, pool *pgxpool.Pool, s3Client *storage.S3Client, p
 	knowledgeHandler := handlers.NewKnowledgeHandler(knowledgeSvc)
 	assetHandler := handlers.NewAssetHandler(assetSvc)
 	authHandler := handlers.NewAuthHandler(authSvc)
-	contextHandler := handlers.NewContextHandler(&simpleContextService{repo: knowledgeRepo})
+	contextHandler := handlers.NewContextHandler(&simpleContextService{repo: knowledgeRepo}, nil)
+	projectHandler := handlers.NewProjectHandler(projectRepo)
 
 	cfg := server.RouterConfig{
 		AuthValidator:    authSvc,
@@ -363,6 +354,7 @@ func startServer(t *testing.T, pool *pgxpool.Pool, s3Client *storage.S3Client, p
 		AssetHandler:     assetHandler,
 		ContextHandler:   contextHandler,
 		AuthHandler:      authHandler,
+		ProjectHandler:   projectHandler,
 	}
 
 	router := server.NewRouter(cfg)

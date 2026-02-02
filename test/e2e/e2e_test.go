@@ -58,7 +58,7 @@ func TestE2E_Bootstrap(t *testing.T) {
 		require.NoError(t, json.Unmarshal(keyResp.Data, &key))
 		assert.NotEmpty(t, key.Token)
 		assert.Equal(t, "test-key", key.Name)
-		assert.Len(t, key.Token, 64) // 32 bytes hex = 64 chars
+		assert.Len(t, key.Token, 68) // ntx_ prefix (4) + 32 bytes hex (64) = 68 chars
 	})
 
 	t.Run("API key works for authentication", func(t *testing.T) {
@@ -83,23 +83,16 @@ func TestE2E_Bootstrap(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(keyResp.Data, &key))
 
-		// Get the key ID from database
-		rows, err := env.Pool.Query(env.Ctx, "SELECT id FROM api_keys WHERE org_id = $1 ORDER BY created_at DESC LIMIT 1", org.ID)
-		require.NoError(t, err)
-		defer rows.Close()
-
-		var keyID string
-		require.True(t, rows.Next())
-		require.NoError(t, rows.Scan(&keyID))
-
-		// Use the key to make an authenticated request
-		authToken := keyID + "." + key.Token
-		resp, err := env.Get("/knowledge", authToken)
+		// Use the token directly to make an authenticated request
+		// Token format is ntx_<64 hex chars>
+		resp, err := env.Get("/knowledge", key.Token)
 		require.NoError(t, err)
 
-		var knowledge []interface{}
+		var knowledge struct {
+			Items []interface{} `json:"items"`
+		}
 		require.NoError(t, json.Unmarshal(resp.Data, &knowledge))
-		assert.NotNil(t, knowledge) // Should be empty array, not error
+		assert.NotNil(t, knowledge.Items) // Should be empty array, not error
 	})
 
 	t.Run("invalid API key returns 401", func(t *testing.T) {
@@ -197,15 +190,17 @@ func TestE2E_KnowledgeLifecycle(t *testing.T) {
 		resp, err := env.Get("/knowledge", env.AuthToken)
 		require.NoError(t, err)
 
-		var knowledge []struct {
-			ID    string `json:"id"`
-			Title string `json:"title"`
+		var knowledge struct {
+			Items []struct {
+				ID    string `json:"id"`
+				Title string `json:"title"`
+			} `json:"items"`
 		}
 		require.NoError(t, json.Unmarshal(resp.Data, &knowledge))
-		assert.GreaterOrEqual(t, len(knowledge), 1)
+		assert.GreaterOrEqual(t, len(knowledge.Items), 1)
 
 		found := false
-		for _, k := range knowledge {
+		for _, k := range knowledge.Items {
 			if k.ID == knowledgeID {
 				found = true
 				break
@@ -463,17 +458,9 @@ func TestE2E_CLIWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(projectDir)
 
-	// Create a project in the database for CLI tests (must be valid UUID)
-	var projectID string
-	t.Run("setup project in database", func(t *testing.T) {
-		row := env.Pool.QueryRow(env.Ctx,
-			"INSERT INTO projects (org_id, name, created_at) VALUES ($1, $2, $3) RETURNING id",
-			env.OrgID, "CLI Test Project", time.Now().UTC())
-		require.NoError(t, row.Scan(&projectID))
-	})
-
 	t.Run("neotex init creates .neotex directory", func(t *testing.T) {
-		output, err := env.RunNeotex(projectDir, "init", "--project-id", projectID)
+		// CLI init uses env vars (set by RunNeotex) for auth and creates project via API
+		output, err := env.RunNeotex(projectDir, "init", "--project", "CLI Test Project")
 		require.NoError(t, err, "init failed: %s", output)
 
 		// Verify .neotex directory exists
@@ -574,15 +561,7 @@ func TestE2E_FullWorkflow(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(keyResp.Data, &key))
 
-		// Get key ID for auth token
-		rows, err := env.Pool.Query(env.Ctx, "SELECT id FROM api_keys WHERE org_id = $1", org.ID)
-		require.NoError(t, err)
-		var keyID string
-		require.True(t, rows.Next())
-		require.NoError(t, rows.Scan(&keyID))
-		rows.Close()
-
-		authToken := keyID + "." + key.Token
+		authToken := key.Token
 
 		// 3. Create knowledge
 		kResp, err := env.Post("/knowledge", map[string]interface{}{

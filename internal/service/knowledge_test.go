@@ -326,6 +326,37 @@ func TestKnowledgeService_Create(t *testing.T) {
 		mockKnowledgeRepo.AssertExpectations(t)
 		mockEmbeddingJobRepo.AssertExpectations(t)
 	})
+
+	t.Run("rolls back when version creation fails (tx)", func(t *testing.T) {
+		mockKnowledgeRepo := new(MockKnowledgeRepository)
+		mockEmbeddingJobRepo := new(MockEmbeddingJobRepository)
+		txRepos := &testTxRepos{
+			knowledge:     mockKnowledgeRepo,
+			embeddingJobs: mockEmbeddingJobRepo,
+		}
+		txRunner := &testTxRunner{repos: txRepos}
+
+		service := NewKnowledgeServiceWithTx(mockKnowledgeRepo, mockEmbeddingJobRepo, txRunner)
+
+		input := CreateInput{
+			OrgID:   "org-1",
+			Type:    domain.KnowledgeTypeGuideline,
+			Title:   "Test Knowledge",
+			BodyMD:  "Body",
+			Summary: "Summary",
+		}
+
+		mockKnowledgeRepo.On("Create", mock.Anything, mock.AnythingOfType("*domain.Knowledge")).Return(nil)
+		mockKnowledgeRepo.On("CreateVersion", mock.Anything, mock.AnythingOfType("*domain.KnowledgeVersion")).Return(errors.New("version error"))
+
+		result, err := service.Create(ctx, input)
+
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.True(t, txRunner.called)
+		mockEmbeddingJobRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+		mockKnowledgeRepo.AssertExpectations(t)
+	})
 }
 
 // TestKnowledgeService_GetByID tests the GetByID method
@@ -620,6 +651,48 @@ func TestKnowledgeService_Update(t *testing.T) {
 		assert.Nil(t, knowledge)
 		assert.Nil(t, version)
 		assert.Equal(t, expectedErr, err)
+		mockKnowledgeRepo.AssertExpectations(t)
+	})
+
+	t.Run("rolls back when version creation fails (tx)", func(t *testing.T) {
+		mockKnowledgeRepo := new(MockKnowledgeRepository)
+		mockEmbeddingJobRepo := new(MockEmbeddingJobRepository)
+		txRepos := &testTxRepos{
+			knowledge:     mockKnowledgeRepo,
+			embeddingJobs: mockEmbeddingJobRepo,
+		}
+		txRunner := &testTxRunner{repos: txRepos}
+
+		service := NewKnowledgeServiceWithTx(mockKnowledgeRepo, mockEmbeddingJobRepo, txRunner)
+
+		knowledge := &domain.Knowledge{
+			ID:     "knowledge-1",
+			OrgID:  "org-1",
+			Title:  "Old",
+			BodyMD: "Old body",
+			Status: domain.KnowledgeStatusDraft,
+		}
+		latestVersion := &domain.KnowledgeVersion{ID: "version-1", KnowledgeID: knowledge.ID, VersionNumber: 1}
+
+		mockKnowledgeRepo.On("GetByID", mock.Anything, knowledge.ID).Return(knowledge, nil)
+		mockKnowledgeRepo.On("GetLatestVersion", mock.Anything, knowledge.ID).Return(latestVersion, nil)
+		mockKnowledgeRepo.On("Update", mock.Anything, mock.AnythingOfType("*domain.Knowledge")).Return(nil)
+		mockKnowledgeRepo.On("CreateVersion", mock.Anything, mock.AnythingOfType("*domain.KnowledgeVersion")).Return(errors.New("version error"))
+
+		input := UpdateInput{
+			KnowledgeID: knowledge.ID,
+			Title:       "New",
+			Summary:     "Summary",
+			BodyMD:      "Body",
+		}
+
+		updated, version, err := service.Update(ctx, input)
+
+		assert.Error(t, err)
+		assert.Nil(t, updated)
+		assert.Nil(t, version)
+		assert.True(t, txRunner.called)
+		mockEmbeddingJobRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 		mockKnowledgeRepo.AssertExpectations(t)
 	})
 }

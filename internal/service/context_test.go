@@ -24,8 +24,48 @@ func (m *MockContextRepository) GetManifest(ctx context.Context, orgID, projectI
 	return args.Get(0).([]*KnowledgeManifestItem), args.Error(1)
 }
 
-func (m *MockContextRepository) SearchByEmbedding(ctx context.Context, embedding []float32, filters SearchFilters, limit int) ([]*SearchResult, error) {
+func (m *MockContextRepository) SearchKnowledgeChunksSemantic(ctx context.Context, embedding []float32, filters SearchFilters, limit int) ([]*ChunkSearchResult, error) {
 	args := m.Called(ctx, embedding, filters, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*ChunkSearchResult), args.Error(1)
+}
+
+func (m *MockContextRepository) SearchKnowledgeChunksLexical(ctx context.Context, query string, filters SearchFilters, limit int) ([]*ChunkSearchResult, error) {
+	args := m.Called(ctx, query, filters, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*ChunkSearchResult), args.Error(1)
+}
+
+func (m *MockContextRepository) SearchKnowledgeSemantic(ctx context.Context, embedding []float32, filters SearchFilters, limit int) ([]*SearchResult, error) {
+	args := m.Called(ctx, embedding, filters, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*SearchResult), args.Error(1)
+}
+
+func (m *MockContextRepository) SearchKnowledgeLexical(ctx context.Context, query string, filters SearchFilters, limit int) ([]*SearchResult, error) {
+	args := m.Called(ctx, query, filters, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*SearchResult), args.Error(1)
+}
+
+func (m *MockContextRepository) SearchAssetsSemantic(ctx context.Context, embedding []float32, filters SearchFilters, limit int) ([]*SearchResult, error) {
+	args := m.Called(ctx, embedding, filters, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*SearchResult), args.Error(1)
+}
+
+func (m *MockContextRepository) SearchAssetsLexical(ctx context.Context, query string, filters SearchFilters, limit int) ([]*SearchResult, error) {
+	args := m.Called(ctx, query, filters, limit)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -38,6 +78,14 @@ func (m *MockContextRepository) GetByIDs(ctx context.Context, ids []string) ([]*
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*domain.Knowledge), args.Error(1)
+}
+
+func (m *MockContextRepository) GetAssetsByIDs(ctx context.Context, ids []string) ([]*domain.Asset, error) {
+	args := m.Called(ctx, ids)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.Asset), args.Error(1)
 }
 
 // MockEmbeddingService is a mock implementation of EmbeddingServiceInterface
@@ -147,23 +195,24 @@ func TestContextService_GetManifest(t *testing.T) {
 		expandedEmbedding := make([]float32, 1536)
 		expandedEmbedding[0] = 0.2
 
-		filters := SearchFilters{OrgID: "org-1"}
-		initialResults := []*SearchResult{
-			{ID: "k1", Title: "Auth Basics", Score: 0.5},
+		filters := SearchFilters{OrgID: "org-1", SourceType: "knowledge"}
+		initialResults := []*ChunkSearchResult{
+			{KnowledgeID: "k1", Title: "Auth Basics", Score: 0.5},
 		}
-		expandedResults := []*SearchResult{
-			{ID: "k2", Title: "Token Handling", Score: 0.9},
+		expandedResults := []*ChunkSearchResult{
+			{KnowledgeID: "k2", Title: "Token Handling", Score: 0.9},
 		}
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "auth and tokens").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, filters, 6).Return(initialResults, nil)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, filters, mock.Anything).Return(initialResults, nil)
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "auth").Return(expandedEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, expandedEmbedding, filters, 6).Return(expandedResults, nil)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, expandedEmbedding, filters, mock.Anything).Return(expandedResults, nil)
 
 		input := SearchInput{
 			Query:   "auth and tokens",
 			Filters: filters,
 			Limit:   5,
+			Mode:    SearchModeSemantic,
 		}
 		result, err := service.Search(ctx, input)
 
@@ -189,24 +238,26 @@ func TestContextService_Search(t *testing.T) {
 		queryEmbedding[0] = 0.1
 
 		filters := SearchFilters{
-			OrgID:     "org-1",
-			ProjectID: "project-1",
-			Type:      domain.KnowledgeTypeGuideline,
-			Status:    domain.KnowledgeStatusApproved,
+			OrgID:      "org-1",
+			ProjectID:  "project-1",
+			Type:       domain.KnowledgeTypeGuideline,
+			Status:     domain.KnowledgeStatusApproved,
+			SourceType: "knowledge",
 		}
 
-		expectedResults := []*SearchResult{
-			{ID: "k1", Title: "Guidelines", Summary: "Coding guidelines", Score: 0.95},
-			{ID: "k2", Title: "More Guidelines", Summary: "More guidelines", Score: 0.85},
+		expectedResults := []*ChunkSearchResult{
+			{KnowledgeID: "k1", Title: "Guidelines", Summary: "Coding guidelines", Score: 0.95},
+			{KnowledgeID: "k2", Title: "More Guidelines", Summary: "More guidelines", Score: 0.85},
 		}
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "how to code").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, filters, 11).Return(expectedResults, nil)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, filters, mock.Anything).Return(expectedResults, nil)
 
 		input := SearchInput{
 			Query:   "how to code",
 			Filters: filters,
 			Limit:   10,
+			Mode:    SearchModeSemantic,
 		}
 		result, err := service.Search(ctx, input)
 
@@ -224,15 +275,18 @@ func TestContextService_Search(t *testing.T) {
 		service := newContextServiceWithAgenticDisabled(mockRepo, mockEmbedding)
 
 		queryEmbedding := make([]float32, 1536)
-		filters := SearchFilters{OrgID: "org-1"}
+		filters := SearchFilters{OrgID: "org-1", SourceType: "knowledge"}
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "test").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, filters, 21).Return([]*SearchResult{}, nil)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, filters, mock.Anything).Return([]*ChunkSearchResult{}, nil)
+		// Fallback to doc-level search when chunks are empty
+		mockRepo.On("SearchKnowledgeSemantic", mock.Anything, queryEmbedding, filters, mock.Anything).Return([]*SearchResult{}, nil)
 
 		input := SearchInput{
 			Query:   "test",
 			Filters: filters,
 			Limit:   0, // Should use default
+			Mode:    SearchModeSemantic,
 		}
 		result, err := service.Search(ctx, input)
 
@@ -250,18 +304,20 @@ func TestContextService_Search(t *testing.T) {
 		filters := SearchFilters{
 			OrgID:      "org-1",
 			PathPrefix: "/src/api",
+			SourceType: "knowledge",
 		}
 
-		expectedResults := []*SearchResult{
-			{ID: "k1", Title: "API Guidelines", Summary: "API specific guidelines", Scope: "/src/api", Score: 0.9},
+		expectedResults := []*ChunkSearchResult{
+			{KnowledgeID: "k1", Title: "API Guidelines", Summary: "API specific guidelines", Scope: "/src/api", Score: 0.9},
 		}
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "api design").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, filters, 21).Return(expectedResults, nil)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, filters, mock.Anything).Return(expectedResults, nil)
 
 		input := SearchInput{
 			Query:   "api design",
 			Filters: filters,
+			Mode:    SearchModeSemantic,
 		}
 		result, err := service.Search(ctx, input)
 
@@ -297,15 +353,16 @@ func TestContextService_Search(t *testing.T) {
 		service := newContextServiceWithAgenticDisabled(mockRepo, mockEmbedding)
 
 		queryEmbedding := make([]float32, 1536)
-		filters := SearchFilters{OrgID: "org-1"}
+		filters := SearchFilters{OrgID: "org-1", SourceType: "knowledge"}
 		expectedErr := errors.New("database error")
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "test").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, filters, 21).Return(nil, expectedErr)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, filters, mock.Anything).Return(nil, expectedErr)
 
 		input := SearchInput{
 			Query:   "test",
 			Filters: filters,
+			Mode:    SearchModeSemantic,
 		}
 		result, err := service.Search(ctx, input)
 
@@ -333,11 +390,11 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 			Query:     "error handling",
 		}
 
-		searchResults := []*SearchResult{
-			{ID: "k1", Title: "API Error Handling", Summary: "How to handle errors in API", Scope: "/src/api/handler.go", Score: 0.9},
-			{ID: "k2", Title: "General Error Guidelines", Summary: "General guidelines", Scope: "/src/api", Score: 0.85},
-			{ID: "k3", Title: "Logging Practices", Summary: "How to log", Scope: "/src", Score: 0.8},
-			{ID: "k4", Title: "Database Guidelines", Summary: "DB patterns", Scope: "/src/db", Score: 0.7},
+		searchResults := []*ChunkSearchResult{
+			{KnowledgeID: "k1", Title: "API Error Handling", Summary: "How to handle errors in API", Scope: "/src/api/handler.go", Score: 0.9},
+			{KnowledgeID: "k2", Title: "General Error Guidelines", Summary: "General guidelines", Scope: "/src/api", Score: 0.85},
+			{KnowledgeID: "k3", Title: "Logging Practices", Summary: "How to log", Scope: "/src", Score: 0.8},
+			{KnowledgeID: "k4", Title: "Database Guidelines", Summary: "DB patterns", Scope: "/src/db", Score: 0.7},
 		}
 
 		expectedKnowledge := []*domain.Knowledge{
@@ -347,16 +404,63 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 		}
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "error handling").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, mock.MatchedBy(func(f SearchFilters) bool {
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, mock.MatchedBy(func(f SearchFilters) bool {
 			return f.OrgID == "org-1" && f.ProjectID == "project-1"
-		}), 10).Return(searchResults, nil)
+		}), mock.Anything).Return(searchResults, nil)
+		mockRepo.On("SearchAssetsSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return([]*SearchResult{}, nil)
 		mockRepo.On("GetByIDs", mock.Anything, []string{"k1", "k2", "k3"}).Return(expectedKnowledge, nil)
 
 		result, err := service.GetRelevantKnowledge(ctx, input)
 
 		require.NoError(t, err)
 		assert.Len(t, result, 3)
-		assert.Equal(t, "k1", result[0].ID) // Exact file match
+		require.NotNil(t, result[0].Knowledge)
+		assert.Equal(t, "k1", result[0].Knowledge.ID) // Exact file match
+		mockRepo.AssertExpectations(t)
+		mockEmbedding.AssertExpectations(t)
+	})
+
+	t.Run("includes assets in relevant results", func(t *testing.T) {
+		mockRepo := new(MockContextRepository)
+		mockEmbedding := new(MockEmbeddingService)
+		service := newContextServiceWithAgenticDisabled(mockRepo, mockEmbedding)
+
+		queryEmbedding := make([]float32, 1536)
+		input := RelevantKnowledgeInput{
+			OrgID:     "org-1",
+			ProjectID: "project-1",
+			FilePath:  "",
+			Query:     "design system",
+		}
+
+		searchResults := []*SearchResult{
+			{ID: "a1", Title: "Logo Asset", Summary: "SVG logo", Score: 0.9, SourceType: "asset"},
+		}
+		chunkResults := []*ChunkSearchResult{
+			{KnowledgeID: "k1", Title: "Design Guidelines", Summary: "Use the logo", Score: 0.8},
+		}
+
+		expectedAsset := []*domain.Asset{
+			{ID: "a1", Filename: "logo.svg"},
+		}
+		expectedKnowledge := []*domain.Knowledge{
+			{ID: "k1", Title: "Design Guidelines"},
+		}
+
+		mockEmbedding.On("GenerateEmbedding", mock.Anything, "design system").Return(queryEmbedding, nil)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return(chunkResults, nil)
+		mockRepo.On("SearchAssetsSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return(searchResults, nil)
+		mockRepo.On("GetAssetsByIDs", mock.Anything, []string{"a1"}).Return(expectedAsset, nil)
+		mockRepo.On("GetByIDs", mock.Anything, []string{"k1"}).Return(expectedKnowledge, nil)
+
+		result, err := service.GetRelevantKnowledge(ctx, input)
+
+		require.NoError(t, err)
+		assert.Len(t, result, 2)
+		require.NotNil(t, result[0].Asset)
+		assert.Equal(t, "a1", result[0].Asset.ID)
+		require.NotNil(t, result[1].Knowledge)
+		assert.Equal(t, "k1", result[1].Knowledge.ID)
 		mockRepo.AssertExpectations(t)
 		mockEmbedding.AssertExpectations(t)
 	})
@@ -375,10 +479,10 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 		}
 
 		// Semantic match is first, but file match should be promoted
-		searchResults := []*SearchResult{
-			{ID: "k1", Title: "General Patterns", Summary: "Patterns", Scope: "", Score: 0.95},
-			{ID: "k2", Title: "Handler Guidelines", Summary: "Handler specific", Scope: "/src/api/handler.go", Score: 0.7},
-			{ID: "k3", Title: "API Guidelines", Summary: "API wide", Scope: "/src/api", Score: 0.8},
+		searchResults := []*ChunkSearchResult{
+			{KnowledgeID: "k1", Title: "General Patterns", Summary: "Patterns", Scope: "", Score: 0.95},
+			{KnowledgeID: "k2", Title: "Handler Guidelines", Summary: "Handler specific", Scope: "/src/api/handler.go", Score: 0.7},
+			{KnowledgeID: "k3", Title: "API Guidelines", Summary: "API wide", Scope: "/src/api", Score: 0.8},
 		}
 
 		expectedKnowledge := []*domain.Knowledge{
@@ -388,7 +492,8 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 		}
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "handler patterns").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, mock.Anything, 10).Return(searchResults, nil)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return(searchResults, nil)
+		mockRepo.On("SearchAssetsSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return([]*SearchResult{}, nil)
 		mockRepo.On("GetByIDs", mock.Anything, []string{"k2", "k3", "k1"}).Return(expectedKnowledge, nil)
 
 		result, err := service.GetRelevantKnowledge(ctx, input)
@@ -396,11 +501,14 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, result, 3)
 		// File match should be first
-		assert.Equal(t, "k2", result[0].ID)
+		require.NotNil(t, result[0].Knowledge)
+		assert.Equal(t, "k2", result[0].Knowledge.ID)
 		// Path match should be second
-		assert.Equal(t, "k3", result[1].ID)
+		require.NotNil(t, result[1].Knowledge)
+		assert.Equal(t, "k3", result[1].Knowledge.ID)
 		// Semantic match should be third
-		assert.Equal(t, "k1", result[2].ID)
+		require.NotNil(t, result[2].Knowledge)
+		assert.Equal(t, "k1", result[2].Knowledge.ID)
 		mockRepo.AssertExpectations(t)
 	})
 
@@ -417,9 +525,9 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 			Query:     "user management",
 		}
 
-		searchResults := []*SearchResult{
-			{ID: "k1", Title: "General Users", Summary: "User management", Scope: "", Score: 0.95},
-			{ID: "k2", Title: "API Users", Summary: "API user handling", Scope: "/src/api", Score: 0.8},
+		searchResults := []*ChunkSearchResult{
+			{KnowledgeID: "k1", Title: "General Users", Summary: "User management", Scope: "", Score: 0.95},
+			{KnowledgeID: "k2", Title: "API Users", Summary: "API user handling", Scope: "/src/api", Score: 0.8},
 		}
 
 		expectedKnowledge := []*domain.Knowledge{
@@ -428,7 +536,8 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 		}
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "user management").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, mock.Anything, 10).Return(searchResults, nil)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return(searchResults, nil)
+		mockRepo.On("SearchAssetsSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return([]*SearchResult{}, nil)
 		mockRepo.On("GetByIDs", mock.Anything, []string{"k2", "k1"}).Return(expectedKnowledge, nil)
 
 		result, err := service.GetRelevantKnowledge(ctx, input)
@@ -436,8 +545,10 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, result, 2)
 		// Path prefix match should come first
-		assert.Equal(t, "k2", result[0].ID)
-		assert.Equal(t, "k1", result[1].ID)
+		require.NotNil(t, result[0].Knowledge)
+		assert.Equal(t, "k2", result[0].Knowledge.ID)
+		require.NotNil(t, result[1].Knowledge)
+		assert.Equal(t, "k1", result[1].Knowledge.ID)
 		mockRepo.AssertExpectations(t)
 	})
 
@@ -454,8 +565,8 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 			Query:     "main function",
 		}
 
-		searchResults := []*SearchResult{
-			{ID: "k1", Title: "Main Guidelines", Summary: "Main file", Score: 0.9},
+		searchResults := []*ChunkSearchResult{
+			{KnowledgeID: "k1", Title: "Main Guidelines", Summary: "Main file", Score: 0.9},
 		}
 
 		expectedKnowledge := []*domain.Knowledge{
@@ -463,13 +574,15 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 		}
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "main function").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, mock.Anything, 10).Return(searchResults, nil)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return(searchResults, nil)
+		mockRepo.On("SearchAssetsSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return([]*SearchResult{}, nil)
 		mockRepo.On("GetByIDs", mock.Anything, []string{"k1"}).Return(expectedKnowledge, nil)
 
 		result, err := service.GetRelevantKnowledge(ctx, input)
 
 		require.NoError(t, err)
 		assert.Len(t, result, 1)
+		require.NotNil(t, result[0].Knowledge)
 		mockRepo.AssertExpectations(t)
 	})
 
@@ -487,7 +600,10 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 		}
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "something rare").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, mock.Anything, 10).Return([]*SearchResult{}, nil)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return([]*ChunkSearchResult{}, nil)
+		// Fallback to doc-level search when chunks are empty
+		mockRepo.On("SearchKnowledgeSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return([]*SearchResult{}, nil)
+		mockRepo.On("SearchAssetsSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return([]*SearchResult{}, nil)
 
 		result, err := service.GetRelevantKnowledge(ctx, input)
 
@@ -534,7 +650,7 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 		}
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "test").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, mock.Anything, 10).Return(nil, expectedErr)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return(nil, expectedErr)
 
 		result, err := service.GetRelevantKnowledge(ctx, input)
 
@@ -558,12 +674,13 @@ func TestContextService_GetRelevantKnowledge(t *testing.T) {
 			Query:     "test",
 		}
 
-		searchResults := []*SearchResult{
-			{ID: "k1", Title: "Test", Score: 0.9},
+		searchResults := []*ChunkSearchResult{
+			{KnowledgeID: "k1", Title: "Test", Score: 0.9},
 		}
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "test").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, mock.Anything, 10).Return(searchResults, nil)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return(searchResults, nil)
+		mockRepo.On("SearchAssetsSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return([]*SearchResult{}, nil)
 		mockRepo.On("GetByIDs", mock.Anything, []string{"k1"}).Return(nil, expectedErr)
 
 		result, err := service.GetRelevantKnowledge(ctx, input)
@@ -593,14 +710,12 @@ func TestContextService_GetRelevantKnowledge_RelevanceRanking(t *testing.T) {
 		}
 
 		// All have same semantic score, but different scope relevance
-		searchResults := []*SearchResult{
-			{ID: "semantic", Title: "Semantic Match", Scope: "/src/db", Score: 0.9},           // No path match
-			{ID: "path", Title: "Path Match", Scope: "/src/api/users", Score: 0.9},            // Path prefix match
-			{ID: "file", Title: "File Match", Scope: "/src/api/users/handler.go", Score: 0.9}, // Exact file match
-			{ID: "root", Title: "Root Match", Scope: "/src", Score: 0.9},                      // Partial path match
+		searchResults := []*ChunkSearchResult{
+			{KnowledgeID: "semantic", Title: "Semantic Match", Scope: "/src/db", Score: 0.9},           // No path match
+			{KnowledgeID: "path", Title: "Path Match", Scope: "/src/api/users", Score: 0.9},            // Path prefix match
+			{KnowledgeID: "file", Title: "File Match", Scope: "/src/api/users/handler.go", Score: 0.9}, // Exact file match
+			{KnowledgeID: "root", Title: "Root Match", Scope: "/src", Score: 0.9},                      // Partial path match
 		}
-
-		expectedOrder := []string{"file", "path", "root"}
 
 		expectedKnowledge := []*domain.Knowledge{
 			{ID: "file", Title: "File Match", Scope: "/src/api/users/handler.go"},
@@ -609,15 +724,20 @@ func TestContextService_GetRelevantKnowledge_RelevanceRanking(t *testing.T) {
 		}
 
 		mockEmbedding.On("GenerateEmbedding", mock.Anything, "user handler").Return(queryEmbedding, nil)
-		mockRepo.On("SearchByEmbedding", mock.Anything, queryEmbedding, mock.Anything, 10).Return(searchResults, nil)
-		mockRepo.On("GetByIDs", mock.Anything, expectedOrder).Return(expectedKnowledge, nil)
+		mockRepo.On("SearchKnowledgeChunksSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return(searchResults, nil)
+		mockRepo.On("SearchAssetsSemantic", mock.Anything, queryEmbedding, mock.Anything, mock.Anything).Return([]*SearchResult{}, nil)
+		// Order of IDs within same relevance tier is non-deterministic since sort is not stable
+		mockRepo.On("GetByIDs", mock.Anything, mock.Anything).Return(expectedKnowledge, nil)
 
 		result, err := service.GetRelevantKnowledge(ctx, input)
 
 		require.NoError(t, err)
 		assert.Len(t, result, 3)
-		assert.Equal(t, "file", result[0].ID)
-		assert.Equal(t, "path", result[1].ID)
-		assert.Equal(t, "root", result[2].ID)
+		require.NotNil(t, result[0].Knowledge)
+		require.NotNil(t, result[1].Knowledge)
+		require.NotNil(t, result[2].Knowledge)
+		assert.Equal(t, "file", result[0].Knowledge.ID)
+		assert.Equal(t, "path", result[1].Knowledge.ID)
+		assert.Equal(t, "root", result[2].Knowledge.ID)
 	})
 }

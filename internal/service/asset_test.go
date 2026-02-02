@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -235,6 +236,52 @@ func TestAssetService_CompleteUpload_LinkToKnowledge(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, asset)
 
+	mockStorage.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+}
+
+func TestAssetService_CompleteUpload_RollsBackOnLinkFailure(t *testing.T) {
+	ctx := context.Background()
+	mockStorage := new(MockStorageClient)
+	mockRepo := new(MockAssetRepository)
+	mockEmbeddingJobRepo := new(MockEmbeddingJobRepository)
+
+	txRepos := &testTxRepos{
+		assets:        mockRepo,
+		embeddingJobs: mockEmbeddingJobRepo,
+	}
+	txRunner := &testTxRunner{repos: txRepos}
+
+	svc := NewAssetServiceWithEmbeddingsAndTx(mockRepo, mockStorage, mockEmbeddingJobRepo, txRunner)
+
+	knowledgeID := "knowledge-789"
+	input := CompleteUploadInput{
+		AssetID:     "asset-id-123",
+		OrgID:       "org-123",
+		Filename:    "document.pdf",
+		ContentType: "application/pdf",
+		StorageKey:  "org-123/asset-id-123/document.pdf",
+		SHA256:      "abc123def456",
+		Description: "Test document",
+		KnowledgeID: &knowledgeID,
+	}
+
+	mockStorage.On("HeadObject", ctx, input.StorageKey).
+		Return(&ObjectMetadata{
+			ContentLength: 1024,
+			ContentType:   "application/pdf",
+			ETag:          "\"abc123def456\"",
+		}, nil)
+
+	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.Asset")).Return(nil)
+	mockRepo.On("LinkToKnowledge", ctx, knowledgeID, input.AssetID).Return(errors.New("link error"))
+
+	asset, err := svc.CompleteUpload(ctx, input)
+
+	assert.Error(t, err)
+	assert.Nil(t, asset)
+	assert.True(t, txRunner.called)
+	mockEmbeddingJobRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 	mockStorage.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 }

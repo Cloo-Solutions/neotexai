@@ -39,6 +39,7 @@ type AssetService struct {
 	storageClient    StorageClientInterface
 	embeddingJobRepo AssetEmbeddingJobRepository
 	uuidGen          UUIDGenerator
+	txRunner         TxRunner
 }
 
 func NewAssetService(assetRepo AssetRepositoryInterface, storageClient StorageClientInterface) *AssetService {
@@ -46,6 +47,7 @@ func NewAssetService(assetRepo AssetRepositoryInterface, storageClient StorageCl
 		assetRepo:     assetRepo,
 		storageClient: storageClient,
 		uuidGen:       &DefaultUUIDGenerator{},
+		txRunner:      nil,
 	}
 }
 
@@ -55,6 +57,17 @@ func NewAssetServiceWithEmbeddings(assetRepo AssetRepositoryInterface, storageCl
 		storageClient:    storageClient,
 		embeddingJobRepo: embeddingJobRepo,
 		uuidGen:          &DefaultUUIDGenerator{},
+		txRunner:         nil,
+	}
+}
+
+func NewAssetServiceWithEmbeddingsAndTx(assetRepo AssetRepositoryInterface, storageClient StorageClientInterface, embeddingJobRepo AssetEmbeddingJobRepository, txRunner TxRunner) *AssetService {
+	return &AssetService{
+		assetRepo:        assetRepo,
+		storageClient:    storageClient,
+		embeddingJobRepo: embeddingJobRepo,
+		uuidGen:          &DefaultUUIDGenerator{},
+		txRunner:         txRunner,
 	}
 }
 
@@ -67,6 +80,7 @@ func NewAssetServiceWithUUIDGen(
 		assetRepo:     assetRepo,
 		storageClient: storageClient,
 		uuidGen:       uuidGen,
+		txRunner:      nil,
 	}
 }
 
@@ -131,6 +145,38 @@ func (s *AssetService) CompleteUpload(ctx context.Context, input CompleteUploadI
 		Keywords:    input.Keywords,
 		Description: input.Description,
 		CreatedAt:   now,
+	}
+
+	if s.txRunner != nil {
+		if err := s.txRunner.WithTx(ctx, func(repos TxRepositories) error {
+			assetRepo := repos.Assets()
+
+			if err := assetRepo.Create(ctx, asset); err != nil {
+				return fmt.Errorf("failed to create asset record: %w", err)
+			}
+
+			if input.KnowledgeID != nil && *input.KnowledgeID != "" {
+				if err := assetRepo.LinkToKnowledge(ctx, *input.KnowledgeID, input.AssetID); err != nil {
+					return fmt.Errorf("failed to link asset to knowledge: %w", err)
+				}
+			}
+
+			if s.embeddingJobRepo != nil && (input.Description != "" || len(input.Keywords) > 0) {
+				job := &domain.EmbeddingJob{
+					ID:        uuid.NewString(),
+					AssetID:   input.AssetID,
+					Status:    domain.EmbeddingJobStatusPending,
+					CreatedAt: now,
+				}
+				if err := repos.EmbeddingJobs().Create(ctx, job); err != nil {
+					return fmt.Errorf("failed to create embedding job: %w", err)
+				}
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		return asset, nil
 	}
 
 	if err := s.assetRepo.Create(ctx, asset); err != nil {

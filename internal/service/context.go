@@ -29,30 +29,69 @@ type SearchFilters struct {
 	Type       domain.KnowledgeType
 	Status     domain.KnowledgeStatus
 	PathPrefix string
+	// SourceType filters results to "knowledge" or "asset"
+	SourceType string
 }
+
+// SearchMode controls retrieval strategy.
+type SearchMode string
+
+const (
+	SearchModeHybrid   SearchMode = "hybrid"
+	SearchModeSemantic SearchMode = "semantic"
+	SearchModeLexical  SearchMode = "lexical"
+)
 
 // SearchResult represents a search result with relevance score
 type SearchResult struct {
-	ID      string
-	Title   string
-	Summary string
-	Scope   string
-	Score   float32
+	ID        string
+	Title     string
+	Summary   string
+	Scope     string
+	Snippet   string
+	UpdatedAt time.Time
+	Score     float32
+	// SourceType is "knowledge" or "asset"
+	SourceType string
+}
+
+// ChunkSearchResult represents a chunk-level knowledge hit.
+type ChunkSearchResult struct {
+	KnowledgeID string
+	Title       string
+	Summary     string
+	Scope       string
+	Content     string
+	UpdatedAt   time.Time
+	Score       float32
 }
 
 // SearchInput represents input for search operation
 type SearchInput struct {
 	Query   string
 	Filters SearchFilters
+	Mode    SearchMode
+	Exact   bool
 	Limit   int
 	Cursor  string
 }
 
 // SearchOutput represents output from search operation
 type SearchOutput struct {
-	Results []*SearchResult
-	Cursor  string
-	HasMore bool
+	Results  []*SearchResult
+	Cursor   string
+	HasMore  bool
+	SearchID string
+}
+
+// RelevantItem represents a top-ranked knowledge or asset item.
+type RelevantItem struct {
+	ID         string
+	SourceType string
+	Score      float32
+	Scope      string
+	Knowledge  *domain.Knowledge
+	Asset      *domain.Asset
 }
 
 // RelevantKnowledgeInput represents input for GetRelevantKnowledge
@@ -66,8 +105,14 @@ type RelevantKnowledgeInput struct {
 // ContextRepositoryInterface defines the repository interface for context operations
 type ContextRepositoryInterface interface {
 	GetManifest(ctx context.Context, orgID, projectID string) ([]*KnowledgeManifestItem, error)
-	SearchByEmbedding(ctx context.Context, embedding []float32, filters SearchFilters, limit int) ([]*SearchResult, error)
+	SearchKnowledgeChunksSemantic(ctx context.Context, embedding []float32, filters SearchFilters, limit int) ([]*ChunkSearchResult, error)
+	SearchKnowledgeChunksLexical(ctx context.Context, query string, filters SearchFilters, limit int) ([]*ChunkSearchResult, error)
+	SearchKnowledgeSemantic(ctx context.Context, embedding []float32, filters SearchFilters, limit int) ([]*SearchResult, error)
+	SearchKnowledgeLexical(ctx context.Context, query string, filters SearchFilters, limit int) ([]*SearchResult, error)
+	SearchAssetsSemantic(ctx context.Context, embedding []float32, filters SearchFilters, limit int) ([]*SearchResult, error)
+	SearchAssetsLexical(ctx context.Context, query string, filters SearchFilters, limit int) ([]*SearchResult, error)
 	GetByIDs(ctx context.Context, ids []string) ([]*domain.Knowledge, error)
+	GetAssetsByIDs(ctx context.Context, ids []string) ([]*domain.Asset, error)
 }
 
 // EmbeddingServiceInterface defines the interface for embedding generation
@@ -149,6 +194,9 @@ func (s *ContextService) Search(ctx context.Context, input SearchInput) (*Search
 	})
 	defer span.End()
 
+	input.Mode = normalizeSearchMode(input.Mode)
+	input.Filters.SourceType = normalizeSourceTypeFilter(input.Filters.SourceType)
+
 	limit := input.Limit
 	if limit <= 0 {
 		limit = 20
@@ -164,12 +212,12 @@ func (s *ContextService) Search(ctx context.Context, input SearchInput) (*Search
 	}
 
 	fetchLimit := limit + offset + 1
-	results, err := s.searchOnce(ctx, input.Query, input.Filters, fetchLimit)
+	results, err := s.searchOnce(ctx, input, fetchLimit)
 	if err != nil {
 		return nil, err
 	}
 
-	if !s.shouldAgentic(results, fetchLimit) {
+	if !s.shouldAgentic(input, results, fetchLimit) {
 		return s.buildSearchOutput(results, offset, limit), nil
 	}
 
@@ -225,69 +273,9 @@ func decodeSearchCursor(cursor string) (int, error) {
 	return strconv.Atoi(parts[0])
 }
 
-func (s *ContextService) searchOnce(ctx context.Context, query string, filters SearchFilters, limit int) ([]*SearchResult, error) {
-	embedding, err := s.embedding.GenerateEmbedding(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	return s.repo.SearchByEmbedding(ctx, embedding, filters, limit)
-}
-
-func (s *ContextService) shouldAgentic(results []*SearchResult, limit int) bool {
-	if !s.cfg.AgenticSearch.Enabled {
-		return false
-	}
-	minResults := s.cfg.AgenticSearch.MinResults
-	if minResults <= 0 {
-		return false
-	}
-	if minResults > limit {
-		minResults = limit
-	}
-	return len(results) < minResults
-}
-
-func (s *ContextService) agenticSearch(ctx context.Context, input SearchInput, initial []*SearchResult, limit int) ([]*SearchResult, error) {
-	merged := make(map[string]*SearchResult)
-	mergeResults(merged, initial)
-
-	variants := generateQueryVariants(input.Query, s.cfg.AgenticSearch.MaxVariants)
-	maxIterations := s.cfg.AgenticSearch.MaxIterations
-	if maxIterations <= 0 {
-		return initial, nil
-	}
-
-	iterations := 0
-	for _, variant := range variants {
-		if iterations >= maxIterations {
-			break
-		}
-		if variant == "" || strings.EqualFold(strings.TrimSpace(variant), strings.TrimSpace(input.Query)) {
-			continue
-		}
-		results, err := s.searchOnce(ctx, variant, input.Filters, limit)
-		if err != nil {
-			return nil, err
-		}
-		mergeResults(merged, results)
-		iterations++
-		if len(merged) >= limit && limit > 0 {
-			break
-		}
-	}
-
-	return sortResultsByScore(merged), nil
-}
-
-// GetRelevantKnowledge auto-fetches up to 3 relevant items based on context
+// GetRelevantKnowledge auto-fetches up to 3 relevant knowledge or asset items based on context
 // Relevance ranking: exact file match > path prefix match > semantic similarity
-func (s *ContextService) GetRelevantKnowledge(ctx context.Context, input RelevantKnowledgeInput) ([]*domain.Knowledge, error) {
-	// Generate embedding for query
-	embedding, err := s.embedding.GenerateEmbedding(ctx, input.Query)
-	if err != nil {
-		return nil, err
-	}
-
+func (s *ContextService) GetRelevantKnowledge(ctx context.Context, input RelevantKnowledgeInput) ([]*RelevantItem, error) {
 	// Search with org/project filter
 	filters := SearchFilters{
 		OrgID:     input.OrgID,
@@ -295,13 +283,18 @@ func (s *ContextService) GetRelevantKnowledge(ctx context.Context, input Relevan
 	}
 
 	// Fetch more results than needed to allow for re-ranking
-	results, err := s.repo.SearchByEmbedding(ctx, embedding, filters, 10)
+	results, err := s.searchOnce(ctx, SearchInput{
+		Query:   input.Query,
+		Filters: filters,
+		Mode:    SearchModeSemantic,
+		Exact:   true,
+	}, 10)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(results) == 0 {
-		return []*domain.Knowledge{}, nil
+		return []*RelevantItem{}, nil
 	}
 
 	// Re-rank results by relevance
@@ -314,14 +307,70 @@ func (s *ContextService) GetRelevantKnowledge(ctx context.Context, input Relevan
 	}
 	topResults := rankedResults[:maxResults]
 
-	// Extract IDs
-	ids := make([]string, len(topResults))
-	for i, r := range topResults {
-		ids[i] = r.ID
+	knowledgeIDs := make([]string, 0, len(topResults))
+	assetIDs := make([]string, 0, len(topResults))
+	for _, r := range topResults {
+		sourceType := normalizeSourceType(r.SourceType)
+		if sourceType == "asset" {
+			assetIDs = append(assetIDs, r.ID)
+		} else {
+			knowledgeIDs = append(knowledgeIDs, r.ID)
+		}
 	}
 
-	// Fetch full knowledge items
-	return s.repo.GetByIDs(ctx, ids)
+	var knowledgeItems []*domain.Knowledge
+	var assetItems []*domain.Asset
+	if len(knowledgeIDs) > 0 {
+		var err error
+		knowledgeItems, err = s.repo.GetByIDs(ctx, knowledgeIDs)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(assetIDs) > 0 {
+		var err error
+		assetItems, err = s.repo.GetAssetsByIDs(ctx, assetIDs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	knowledgeByID := make(map[string]*domain.Knowledge, len(knowledgeItems))
+	for _, item := range knowledgeItems {
+		if item != nil {
+			knowledgeByID[item.ID] = item
+		}
+	}
+	assetByID := make(map[string]*domain.Asset, len(assetItems))
+	for _, item := range assetItems {
+		if item != nil {
+			assetByID[item.ID] = item
+		}
+	}
+
+	relevantItems := make([]*RelevantItem, 0, len(topResults))
+	for _, r := range topResults {
+		sourceType := normalizeSourceType(r.SourceType)
+		item := &RelevantItem{
+			ID:         r.ID,
+			SourceType: sourceType,
+			Score:      r.Score,
+			Scope:      r.Scope,
+		}
+		if sourceType == "asset" {
+			if asset, ok := assetByID[r.ID]; ok {
+				item.Asset = asset
+				relevantItems = append(relevantItems, item)
+			}
+			continue
+		}
+		if knowledge, ok := knowledgeByID[r.ID]; ok {
+			item.Knowledge = knowledge
+			relevantItems = append(relevantItems, item)
+		}
+	}
+
+	return relevantItems, nil
 }
 
 // rankedSearchResult extends SearchResult with relevance score for ranking
@@ -337,15 +386,18 @@ func rankByRelevance(results []*SearchResult, filePath string) []*SearchResult {
 		return results
 	}
 
+	cleanFilePath := strings.TrimRight(filePath, "/")
+
 	ranked := make([]rankedSearchResult, len(results))
 	for i, r := range results {
 		score := 1 // Default: semantic match only
 
 		if r.Scope != "" {
+			scope := strings.TrimRight(r.Scope, "/")
 			// Exact file match
-			if r.Scope == filePath {
+			if scope == cleanFilePath {
 				score = 3
-			} else if strings.HasPrefix(filePath, r.Scope) || strings.HasPrefix(r.Scope+"/", filePath[:min(len(filePath), len(r.Scope)+1)]) {
+			} else if isPathPrefix(scope, cleanFilePath) {
 				// Path prefix match: scope is a parent directory of filePath
 				score = 2
 			}
@@ -372,4 +424,28 @@ func rankByRelevance(results []*SearchResult, filePath string) []*SearchResult {
 	}
 
 	return result
+}
+
+func isPathPrefix(scope, filePath string) bool {
+	if scope == "" || filePath == "" {
+		return false
+	}
+	if scope == "/" {
+		return strings.HasPrefix(filePath, "/")
+	}
+	if !strings.HasPrefix(filePath, scope) {
+		return false
+	}
+	if len(filePath) == len(scope) {
+		return true
+	}
+	return filePath[len(scope)] == '/'
+}
+
+func normalizeSourceType(sourceType string) string {
+	sourceType = strings.TrimSpace(strings.ToLower(sourceType))
+	if sourceType == "" {
+		return "knowledge"
+	}
+	return sourceType
 }

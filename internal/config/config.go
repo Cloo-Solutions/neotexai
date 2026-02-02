@@ -21,6 +21,8 @@ type Config struct {
 	S3Region    string `envconfig:"S3_REGION" default:"us-east-1"`
 
 	OpenAIAPIKey string `envconfig:"OPENAI_API_KEY"`
+	// EmbeddingWorkers controls how many embedding workers to start
+	EmbeddingWorkers int `envconfig:"EMBEDDING_WORKERS" default:"1"`
 
 	// Bootstrap: create initial organization and API key on startup
 	InitOrgName string `envconfig:"INIT_ORG_NAME"`

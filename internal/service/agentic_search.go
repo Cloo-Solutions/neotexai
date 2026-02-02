@@ -20,9 +20,30 @@ func mergeResults(dst map[string]*SearchResult, results []*SearchResult) {
 		if r == nil {
 			continue
 		}
-		existing, ok := dst[r.ID]
+		sourceType := normalizeSourceType(r.SourceType)
+		key := sourceType + ":" + r.ID
+		if r.SourceType == "" {
+			r.SourceType = sourceType
+		}
+		existing, ok := dst[key]
 		if !ok || r.Score > existing.Score {
-			dst[r.ID] = r
+			dst[key] = r
+			continue
+		}
+		if existing.Title == "" && r.Title != "" {
+			existing.Title = r.Title
+		}
+		if existing.Summary == "" && r.Summary != "" {
+			existing.Summary = r.Summary
+		}
+		if existing.Scope == "" && r.Scope != "" {
+			existing.Scope = r.Scope
+		}
+		if existing.Snippet == "" && r.Snippet != "" {
+			existing.Snippet = r.Snippet
+		}
+		if existing.UpdatedAt.IsZero() && !r.UpdatedAt.IsZero() {
+			existing.UpdatedAt = r.UpdatedAt
 		}
 	}
 }
@@ -33,7 +54,10 @@ func sortResultsByScore(results map[string]*SearchResult) []*SearchResult {
 		out = append(out, r)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].Score > out[j].Score
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
 	})
 	return out
 }

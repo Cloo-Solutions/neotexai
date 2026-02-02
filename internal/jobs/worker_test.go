@@ -45,11 +45,6 @@ func (m *MockEmbeddingJobRepository) IncrementRetries(ctx context.Context, jobID
 	return args.Error(0)
 }
 
-func (m *MockEmbeddingJobRepository) MarkProcessed(ctx context.Context, jobID string, processedAt time.Time) error {
-	args := m.Called(ctx, jobID, processedAt)
-	return args.Error(0)
-}
-
 // MockEmbeddingService is a mock implementation of EmbeddingService
 type MockEmbeddingService struct {
 	mock.Mock
@@ -150,9 +145,7 @@ func TestEmbeddingWorker_ProcessJobs_Success(t *testing.T) {
 	}
 
 	mockRepo.On("GetPendingJobs", mock.Anything).Return([]*domain.EmbeddingJob{job}, nil)
-	mockRepo.On("UpdateJobStatus", mock.Anything, "job-1", domain.EmbeddingJobStatusProcessing, "").Return(nil)
 	mockService.On("GenerateEmbedding", mock.Anything, "knowledge-1").Return(nil)
-	mockRepo.On("MarkProcessed", mock.Anything, "job-1", mock.AnythingOfType("time.Time")).Return(nil)
 	mockRepo.On("UpdateJobStatus", mock.Anything, "job-1", domain.EmbeddingJobStatusCompleted, "").Return(nil)
 
 	worker := NewEmbeddingWorker(mockRepo, mockService)
@@ -176,7 +169,6 @@ func TestEmbeddingWorker_ProcessJobs_FailureWithRetry(t *testing.T) {
 	}
 
 	mockRepo.On("GetPendingJobs", mock.Anything).Return([]*domain.EmbeddingJob{job}, nil)
-	mockRepo.On("UpdateJobStatus", mock.Anything, "job-1", domain.EmbeddingJobStatusProcessing, "").Return(nil)
 	mockService.On("GenerateEmbedding", mock.Anything, "knowledge-1").Return(errors.New("embedding failed"))
 	mockRepo.On("IncrementRetries", mock.Anything, "job-1").Return(nil)
 	mockRepo.On("UpdateJobStatus", mock.Anything, "job-1", domain.EmbeddingJobStatusPending, mock.MatchedBy(func(msg string) bool {
@@ -204,7 +196,6 @@ func TestEmbeddingWorker_ProcessJobs_MaxRetriesExceeded(t *testing.T) {
 	}
 
 	mockRepo.On("GetPendingJobs", mock.Anything).Return([]*domain.EmbeddingJob{job}, nil)
-	mockRepo.On("UpdateJobStatus", mock.Anything, "job-1", domain.EmbeddingJobStatusProcessing, "").Return(nil)
 	mockService.On("GenerateEmbedding", mock.Anything, "knowledge-1").Return(errors.New("embedding failed"))
 	mockRepo.On("IncrementRetries", mock.Anything, "job-1").Return(nil)
 	mockRepo.On("UpdateJobStatus", mock.Anything, "job-1", domain.EmbeddingJobStatusFailed, mock.MatchedBy(func(msg string) bool {
@@ -242,15 +233,11 @@ func TestEmbeddingWorker_ProcessJobs_MultipleJobs(t *testing.T) {
 	mockRepo.On("GetPendingJobs", mock.Anything).Return(jobs, nil)
 
 	// Job 1 succeeds
-	mockRepo.On("UpdateJobStatus", mock.Anything, "job-1", domain.EmbeddingJobStatusProcessing, "").Return(nil)
 	mockService.On("GenerateEmbedding", mock.Anything, "knowledge-1").Return(nil)
-	mockRepo.On("MarkProcessed", mock.Anything, "job-1", mock.AnythingOfType("time.Time")).Return(nil)
 	mockRepo.On("UpdateJobStatus", mock.Anything, "job-1", domain.EmbeddingJobStatusCompleted, "").Return(nil)
 
 	// Job 2 succeeds
-	mockRepo.On("UpdateJobStatus", mock.Anything, "job-2", domain.EmbeddingJobStatusProcessing, "").Return(nil)
 	mockService.On("GenerateEmbedding", mock.Anything, "knowledge-2").Return(nil)
-	mockRepo.On("MarkProcessed", mock.Anything, "job-2", mock.AnythingOfType("time.Time")).Return(nil)
 	mockRepo.On("UpdateJobStatus", mock.Anything, "job-2", domain.EmbeddingJobStatusCompleted, "").Return(nil)
 
 	worker := NewEmbeddingWorker(mockRepo, mockService)

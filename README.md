@@ -74,6 +74,14 @@ neotex context open <id>                    # Get full content
 neotex context open <id> --lines 0:50       # Get lines 0-50
 neotex context open <id> --chunk <chunk_id> # Get specific chunk
 neotex context list --path /docs --type doc # List items with filters
+
+# Asset uploads (file, base64, or stdin)
+neotex asset add image.png --description "Logo" --keywords "brand,logo"
+neotex asset add --base64 "<b64>" --filename "screenshot.png"
+cat file.pdf | neotex asset add --stdin --filename "doc.pdf"
+
+# Batch knowledge import (JSONL streaming)
+cat items.jsonl | neotex add --batch --format jsonl --stream
 ```
 
 ## Configuration

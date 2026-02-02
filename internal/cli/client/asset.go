@@ -1,9 +1,12 @@
 package client
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -77,23 +80,37 @@ func AssetCmd() *cobra.Command {
 // AssetAddCmd creates the asset add command.
 func AssetAddCmd() *cobra.Command {
 	var (
-		description string
-		keywords    string
-		knowledgeID string
+		description  string
+		keywords     string
+		knowledgeID  string
+		base64Input  string
+		useStdin     bool
+		encoding     string
+		filename     string
+		mimeTypeFlag string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "add <filepath>",
+		Use:   "add [filepath]",
 		Short: "Upload an asset file",
 		Long: `Upload a file as an asset to the knowledge base.
 
 Examples:
-  # Upload a reference image
+  # Upload a reference image from file
   neotex asset add mockup.png --description "Login page mockup" --keywords "ui,login,mockup"
 
   # Upload and link to existing knowledge
-  neotex asset add diagram.png --knowledge-id abc123`,
-		Args: cobra.ExactArgs(1),
+  neotex asset add diagram.png --knowledge-id abc123
+
+  # Upload from base64 string
+  neotex asset add --base64 "aGVsbG8gd29ybGQ=" --filename "hello.txt"
+
+  # Upload from stdin (raw binary)
+  cat image.png | neotex asset add --stdin --filename "image.png"
+
+  # Upload from stdin with base64 encoding
+  echo "aGVsbG8gd29ybGQ=" | neotex asset add --stdin --encoding base64 --filename "hello.txt"`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			outputJSON, _ := cmd.Flags().GetBool("output")
 			var kw []string
@@ -103,55 +120,127 @@ Examples:
 					kw[i] = strings.TrimSpace(kw[i])
 				}
 			}
-			return runAssetAdd(args[0], description, kw, knowledgeID, outputJSON)
+
+			// Determine file path from args
+			var filePath string
+			if len(args) > 0 {
+				filePath = args[0]
+			}
+
+			return runAssetAddWithOptions(filePath, description, kw, knowledgeID, outputJSON, base64Input, useStdin, encoding, filename, mimeTypeFlag)
 		},
 	}
 
 	cmd.Flags().StringVarP(&description, "description", "d", "", "Description of the asset")
 	cmd.Flags().StringVarP(&keywords, "keywords", "k", "", "Comma-separated keywords for searchability")
 	cmd.Flags().StringVar(&knowledgeID, "knowledge-id", "", "Link to existing knowledge item")
+	cmd.Flags().StringVar(&base64Input, "base64", "", "Base64-encoded file content")
+	cmd.Flags().BoolVar(&useStdin, "stdin", false, "Read content from stdin")
+	cmd.Flags().StringVar(&encoding, "encoding", "raw", "Input encoding for stdin: raw or base64")
+	cmd.Flags().StringVar(&filename, "filename", "", "Filename (required with --base64 or --stdin)")
+	cmd.Flags().StringVar(&mimeTypeFlag, "mime-type", "", "MIME type (auto-detected from filename if not provided)")
 
 	return cmd
 }
 
-func runAssetAdd(filePath, description string, keywords []string, knowledgeID string, outputJSON bool) error {
+// assetInput holds resolved asset input data.
+type assetInput struct {
+	data     []byte
+	filename string
+	size     int64
+}
+
+// resolveAssetInput resolves asset input from various sources.
+func resolveAssetInput(filePath, base64Input string, useStdin bool, encoding, filename string) (*assetInput, error) {
+	switch {
+	case filePath != "":
+		// Existing file path logic
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file: %w", err)
+		}
+		return &assetInput{
+			data:     data,
+			filename: filepath.Base(filePath),
+			size:     int64(len(data)),
+		}, nil
+
+	case base64Input != "":
+		// Decode base64 string to bytes
+		if filename == "" {
+			return nil, errors.New("--filename is required when using --base64")
+		}
+		data, err := base64.StdEncoding.DecodeString(base64Input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64: %w", err)
+		}
+		return &assetInput{
+			data:     data,
+			filename: filename,
+			size:     int64(len(data)),
+		}, nil
+
+	case useStdin:
+		if filename == "" {
+			return nil, errors.New("--filename is required when using --stdin")
+		}
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read stdin: %w", err)
+		}
+		if encoding == "base64" {
+			// Trim whitespace before decoding
+			trimmed := bytes.TrimSpace(data)
+			decoded, err := base64.StdEncoding.DecodeString(string(trimmed))
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode base64 from stdin: %w", err)
+			}
+			data = decoded
+		}
+		return &assetInput{
+			data:     data,
+			filename: filename,
+			size:     int64(len(data)),
+		}, nil
+
+	default:
+		return nil, errors.New("must provide filepath, --base64, or --stdin")
+	}
+}
+
+// detectMimeType determines MIME type from filename or explicit override.
+func detectMimeType(filename, explicitMimeType string) string {
+	if explicitMimeType != "" {
+		return explicitMimeType
+	}
+	mimeType := mime.TypeByExtension(filepath.Ext(filename))
+	if mimeType == "" {
+		return "application/octet-stream"
+	}
+	return mimeType
+}
+
+// runAssetAddWithOptions handles asset upload with all input options.
+func runAssetAddWithOptions(filePath, description string, keywords []string, knowledgeID string, outputJSON bool, base64Input string, useStdin bool, encoding, filenameFlag, mimeTypeFlag string) error {
 	// Load config to get project ID
 	config, err := LoadConfig()
 	if err != nil {
 		return err
 	}
 
-	// Open file and get info
-	file, err := os.Open(filePath)
+	// Resolve input
+	input, err := resolveAssetInput(filePath, base64Input, useStdin, encoding, filenameFlag)
 	if err != nil {
-		return fmt.Errorf("failed to open file: %w", err)
+		return err
 	}
-	defer file.Close()
-
-	stat, err := file.Stat()
-	if err != nil {
-		return fmt.Errorf("failed to stat file: %w", err)
-	}
-
-	filename := filepath.Base(filePath)
 
 	// Detect MIME type
-	mimeType := mime.TypeByExtension(filepath.Ext(filePath))
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
+	mimeType := detectMimeType(input.filename, mimeTypeFlag)
 
-	// Calculate SHA256
+	// Calculate SHA256 from in-memory data
 	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return fmt.Errorf("failed to calculate hash: %w", err)
-	}
+	hash.Write(input.data)
 	sha256Hash := hex.EncodeToString(hash.Sum(nil))
-
-	// Reset file for upload
-	if _, err := file.Seek(0, 0); err != nil {
-		return fmt.Errorf("failed to reset file: %w", err)
-	}
 
 	// Create API client
 	api, err := NewAPIClient()
@@ -161,9 +250,9 @@ func runAssetAdd(filePath, description string, keywords []string, knowledgeID st
 
 	// Step 1: Init upload
 	initReq := InitUploadRequest{
-		Filename:  filename,
+		Filename:  input.filename,
 		MimeType:  mimeType,
-		SizeBytes: stat.Size(),
+		SizeBytes: input.size,
 		ProjectID: config.ProjectID,
 	}
 
@@ -177,8 +266,9 @@ func runAssetAdd(filePath, description string, keywords []string, knowledgeID st
 		return fmt.Errorf("failed to parse init response: %w", err)
 	}
 
-	// Step 2: Upload to presigned URL
-	if err := api.UploadFile(uploadInfo.UploadURL, filePath, mimeType); err != nil {
+	// Step 2: Upload to presigned URL using reader
+	reader := bytes.NewReader(input.data)
+	if err := api.UploadReader(uploadInfo.UploadURL, reader, input.size, mimeType); err != nil {
 		return fmt.Errorf("failed to upload file: %w", err)
 	}
 
@@ -186,7 +276,7 @@ func runAssetAdd(filePath, description string, keywords []string, knowledgeID st
 	completeReq := CompleteUploadRequest{
 		AssetID:     uploadInfo.AssetID,
 		StorageKey:  uploadInfo.StorageKey,
-		Filename:    filename,
+		Filename:    input.filename,
 		MimeType:    mimeType,
 		SHA256:      sha256Hash,
 		ProjectID:   config.ProjectID,

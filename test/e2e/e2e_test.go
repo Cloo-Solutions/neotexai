@@ -534,6 +534,111 @@ func TestE2E_CLIWorkflow(t *testing.T) {
 	})
 }
 
+// TestE2E_CLIAssetBase64 tests asset upload with --base64 flag
+func TestE2E_CLIAssetBase64(t *testing.T) {
+	env := SetupE2EEnv(t)
+	defer env.Cleanup()
+	env.Bootstrap()
+	env.BuildBinaries()
+
+	projectDir, err := os.MkdirTemp("", "neotex-asset-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(projectDir)
+
+	// Initialize project first
+	output, err := env.RunNeotex(projectDir, "init", "--project", "Asset Test Project")
+	require.NoError(t, err, "init failed: %s", output)
+
+	t.Run("asset add with base64 flag", func(t *testing.T) {
+		// Base64 encode "hello world"
+		b64Content := "aGVsbG8gd29ybGQ="
+
+		output, err := env.RunNeotex(projectDir, "asset", "add",
+			"--base64", b64Content,
+			"--filename", "hello.txt",
+			"--description", "Test base64 upload",
+			"--output")
+		require.NoError(t, err, "asset add failed: %s", output)
+
+		// Should contain asset ID
+		assert.Contains(t, output, "id")
+		assert.Contains(t, output, "hello.txt")
+	})
+
+	t.Run("asset add with stdin raw", func(t *testing.T) {
+		// Create a temp file with content
+		content := "stdin raw content"
+
+		output, err := env.RunNeotexWithInput(projectDir, content, "asset", "add",
+			"--stdin",
+			"--filename", "stdin-raw.txt",
+			"--description", "Test stdin raw upload",
+			"--output")
+		require.NoError(t, err, "asset add failed: %s", output)
+
+		assert.Contains(t, output, "id")
+		assert.Contains(t, output, "stdin-raw.txt")
+	})
+
+	t.Run("asset add with stdin base64 encoding", func(t *testing.T) {
+		// Base64 encoded "stdin base64 test"
+		b64Content := "c3RkaW4gYmFzZTY0IHRlc3Q="
+
+		output, err := env.RunNeotexWithInput(projectDir, b64Content, "asset", "add",
+			"--stdin",
+			"--encoding", "base64",
+			"--filename", "stdin-b64.txt",
+			"--description", "Test stdin base64 upload",
+			"--output")
+		require.NoError(t, err, "asset add failed: %s", output)
+
+		assert.Contains(t, output, "id")
+		assert.Contains(t, output, "stdin-b64.txt")
+	})
+}
+
+// TestE2E_CLIBatchJSONL tests JSONL streaming batch for knowledge
+func TestE2E_CLIBatchJSONL(t *testing.T) {
+	env := SetupE2EEnv(t)
+	defer env.Cleanup()
+	env.Bootstrap()
+	env.BuildBinaries()
+
+	projectDir, err := os.MkdirTemp("", "neotex-batch-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(projectDir)
+
+	// Initialize project first
+	output, err := env.RunNeotex(projectDir, "init", "--project", "Batch Test Project")
+	require.NoError(t, err, "init failed: %s", output)
+
+	t.Run("batch add with JSONL format", func(t *testing.T) {
+		// JSONL input: one JSON object per line
+		jsonlInput := `{"type":"guideline","title":"JSONL Item 1","body_md":"# Item 1\n\nFirst JSONL item"}
+{"type":"guideline","title":"JSONL Item 2","body_md":"# Item 2\n\nSecond JSONL item"}
+{"type":"learning","title":"JSONL Item 3","body_md":"# Item 3\n\nThird JSONL item"}`
+
+		output, err := env.RunNeotexWithInput(projectDir, jsonlInput, "add",
+			"--batch",
+			"--format", "jsonl",
+			"--stream",
+			"--output")
+		require.NoError(t, err, "batch add failed: %s", output)
+
+		// Should contain success info
+		assert.Contains(t, output, "succeeded")
+		assert.Contains(t, output, "3") // 3 items succeeded
+	})
+
+	t.Run("verify JSONL items were created", func(t *testing.T) {
+		// Search for one of the items we created
+		output, err := env.RunNeotex(projectDir, "search", "JSONL Item 1", "--output")
+		require.NoError(t, err, "search failed: %s", output)
+
+		assert.Contains(t, output, "JSONL Item 1")
+	})
+}
+
 // TestE2E_ContextVFS tests the virtual filesystem endpoints (open/list)
 func TestE2E_ContextVFS(t *testing.T) {
 	env := SetupE2EEnv(t)

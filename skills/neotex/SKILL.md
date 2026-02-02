@@ -72,8 +72,23 @@ If yes, ask user before storing:
 > "This involved [description]. Save to neotex as [type]: [title]?"
 
 ```bash
+# Single item
 echo '{"type":"learning","title":"...","body_md":"# Title\n\n## Context\n..."}' | neotex add
+
+# Batch from JSON array
+echo '[{"type":"guideline","title":"A","body_md":"..."},{"type":"learning","title":"B","body_md":"..."}]' | neotex add --batch
+
+# Streaming batch from JSONL (one JSON per line, memory-efficient)
+cat items.jsonl | neotex add --batch --format jsonl --stream
 ```
+
+**JSONL format** (one JSON object per line):
+```
+{"type":"guideline","title":"Item 1","body_md":"..."}
+{"type":"learning","title":"Item 2","body_md":"..."}
+```
+
+Use `--format jsonl --stream` for large imports to process items one at a time.
 
 ## When to Store Assets
 
@@ -90,12 +105,28 @@ Save assets when user provides:
 > "You uploaded [filename]. Save to neotex for future reference? I can add keywords and description for searchability."
 
 ```bash
-# Upload an asset
+# Upload from file path
 neotex asset add <filepath> --description "..." --keywords "ui,mockup,login"
+
+# Upload from base64 (useful for API-received content)
+neotex asset add --base64 "<base64string>" --filename "image.png" --description "..."
+
+# Upload from stdin (raw binary)
+cat image.png | neotex asset add --stdin --filename "image.png" --keywords "..."
+
+# Upload from stdin with base64 encoding
+echo "<base64>" | neotex asset add --stdin --encoding base64 --filename "doc.pdf"
 
 # Retrieve an asset
 neotex asset get <asset_id> -o <output_path>
 ```
+
+**Flags for non-file uploads:**
+- `--base64` - Direct base64-encoded content
+- `--stdin` - Read from stdin
+- `--encoding` - Stdin encoding: `raw` (default) or `base64`
+- `--filename` - Required with `--base64` or `--stdin`
+- `--mime-type` - Optional, auto-detected from filename
 
 ## Asset Best Practices
 

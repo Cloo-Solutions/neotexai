@@ -109,11 +109,21 @@ Wait for all background agents to complete. Gather their findings.
 
 ### 3.2 Generate Learnings
 
-For each discovery, save to neotex immediately (no prompts):
+For each discovery, save to neotex. For multiple items, use JSONL streaming:
 
 ```bash
+# Single item
 echo '{"type":"TYPE","title":"TITLE","body_md":"BODY"}' | neotex add --output
+
+# Multiple items (JSONL streaming - memory efficient)
+cat <<'EOF' | neotex add --batch --format jsonl --stream --output
+{"type":"decision","title":"Title 1","body_md":"..."}
+{"type":"guideline","title":"Title 2","body_md":"..."}
+{"type":"learning","title":"Title 3","body_md":"..."}
+EOF
 ```
+
+**Prefer JSONL streaming** when generating multiple learnings to reduce API calls.
 
 ### Learning Templates
 

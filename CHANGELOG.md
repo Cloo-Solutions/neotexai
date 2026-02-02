@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-02-02
+
+### Added
+
+- Base64 input support for asset uploads via `--base64` flag
+- Stdin input support for assets via `--stdin` flag with optional `--encoding base64`
+- `--filename` and `--mime-type` flags for non-file asset uploads
+- JSONL streaming batch mode for knowledge via `--format jsonl --stream`
+- Progress reporting infrastructure for uploads and downloads (`ProgressFunc`, `progressReader`)
+- `UploadReader` and `UploadReaderWithProgress` methods for io.Reader-based uploads
+- `DownloadFileWithProgress` method for downloads with progress callbacks
+- E2E tests for base64 asset uploads and JSONL batch streaming
+
+### Changed
+
+- Asset add command now accepts `[filepath]` as optional (was required)
+- Batch add supports streaming processing for memory-efficient large imports
+- Internal refactor: asset uploads use `resolveAssetInput()` for unified input handling
+
 ## [1.3.0] - 2026-02-02
 
 ### Added
@@ -77,6 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker image with health checks
 - Cross-platform binaries (Linux, macOS, Windows)
 
+[1.4.0]: https://github.com/cloo-solutions/neotexai/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/cloo-solutions/neotexai/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/cloo-solutions/neotexai/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/cloo-solutions/neotexai/releases/tag/v1.1.0

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,6 +50,8 @@ func AddCmd() *cobra.Command {
 		batch          bool
 		atomic         bool
 		idempotencyKey string
+		format         string
+		stream         bool
 	)
 
 	cmd := &cobra.Command{
@@ -70,10 +73,16 @@ Examples:
   echo '[{"type":"guideline","title":"Test1","body_md":"# Test1"},{"type":"guideline","title":"Test2","body_md":"# Test2"}]' | neotex add --batch
 
   # Atomic batch add (all-or-nothing)
-  neotex add --batch --atomic --file batch.json`,
+  neotex add --batch --atomic --file batch.json
+
+  # Streaming batch add from JSONL (one JSON object per line)
+  cat batch.jsonl | neotex add --batch --format jsonl --stream`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			outputJSON, _ := cmd.Flags().GetBool("output")
 			if batch {
+				if format == "jsonl" || stream {
+					return runStreamingBatchAdd(file, outputJSON, idempotencyKey)
+				}
 				return runBatchAdd(file, outputJSON, atomic, idempotencyKey)
 			}
 			return runAdd(file, knowledgeType, title, summary, scope, outputJSON, idempotencyKey)
@@ -88,6 +97,8 @@ Examples:
 	cmd.Flags().BoolVar(&batch, "batch", false, "Enable batch mode (expects JSON array input)")
 	cmd.Flags().BoolVar(&atomic, "atomic", false, "Atomic mode: all-or-nothing (only with --batch)")
 	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "Idempotency key for request deduplication")
+	cmd.Flags().StringVar(&format, "format", "json", "Input format: json (array) or jsonl (line-delimited)")
+	cmd.Flags().BoolVar(&stream, "stream", false, "Enable streaming mode for memory-efficient batch processing")
 
 	return cmd
 }
@@ -358,4 +369,170 @@ func reportAtomicFailure(response BatchResponse, failedResult BatchResult, faile
 	fmt.Println(string(output))
 
 	return fmt.Errorf("atomic batch failed at item %d: %s", failedIndex, failedResult.Error)
+}
+
+// runStreamingBatchAdd processes JSONL input line by line for memory efficiency.
+func runStreamingBatchAdd(file string, outputJSON bool, idempotencyKey string) error {
+	config, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	api, err := NewAPIClient()
+	if err != nil {
+		return err
+	}
+
+	opts := RequestOptions{IdempotencyKey: idempotencyKey}
+
+	// Get input reader
+	var reader io.Reader
+	if file != "" {
+		f, err := os.Open(file)
+		if err != nil {
+			return fmt.Errorf("failed to open file: %w", err)
+		}
+		defer f.Close()
+		reader = f
+	} else {
+		reader = os.Stdin
+	}
+
+	scanner := bufio.NewScanner(reader)
+	// Increase buffer size for large lines (up to 5MB per line)
+	const maxScanTokenSize = 5 * 1024 * 1024
+	buf := make([]byte, maxScanTokenSize)
+	scanner.Buffer(buf, maxScanTokenSize)
+
+	response := BatchResponse{
+		Results: make([]BatchResult, 0),
+	}
+
+	lineNum := 0
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue // Skip empty lines
+		}
+
+		lineNum++
+		response.Total++
+
+		var item CreateKnowledgeRequest
+		if err := json.Unmarshal([]byte(line), &item); err != nil {
+			result := BatchResult{
+				Status: "failed",
+				Error:  fmt.Sprintf("line %d: failed to parse JSON: %v", lineNum, err),
+			}
+			response.Results = append(response.Results, result)
+			response.Failed++
+			if !outputJSON {
+				fmt.Fprintf(os.Stderr, "Line %d: parse error: %v\n", lineNum, err)
+			}
+			continue
+		}
+
+		item.ProjectID = config.ProjectID
+
+		// Validate
+		if item.Type == "" {
+			result := BatchResult{
+				Status: "failed",
+				Error:  "type is required",
+				Title:  item.Title,
+			}
+			response.Results = append(response.Results, result)
+			response.Failed++
+			if !outputJSON {
+				fmt.Fprintf(os.Stderr, "Line %d: type is required\n", lineNum)
+			}
+			continue
+		}
+		if item.Title == "" {
+			result := BatchResult{
+				Status: "failed",
+				Error:  "title is required",
+			}
+			response.Results = append(response.Results, result)
+			response.Failed++
+			if !outputJSON {
+				fmt.Fprintf(os.Stderr, "Line %d: title is required\n", lineNum)
+			}
+			continue
+		}
+		if item.BodyMD == "" {
+			result := BatchResult{
+				Status: "failed",
+				Error:  "body_md is required",
+				Title:  item.Title,
+			}
+			response.Results = append(response.Results, result)
+			response.Failed++
+			if !outputJSON {
+				fmt.Fprintf(os.Stderr, "Line %d: body_md is required\n", lineNum)
+			}
+			continue
+		}
+
+		resp, err := api.PostWithOptions("/knowledge", item, opts)
+		if err != nil {
+			result := BatchResult{
+				Status: "failed",
+				Error:  err.Error(),
+				Title:  item.Title,
+			}
+			response.Results = append(response.Results, result)
+			response.Failed++
+			if !outputJSON {
+				fmt.Fprintf(os.Stderr, "Line %d: %v\n", lineNum, err)
+			}
+			continue
+		}
+
+		var knowledge Knowledge
+		if err := json.Unmarshal(resp.Data, &knowledge); err != nil {
+			result := BatchResult{
+				Status: "failed",
+				Error:  fmt.Sprintf("failed to parse response: %v", err),
+				Title:  item.Title,
+			}
+			response.Results = append(response.Results, result)
+			response.Failed++
+			continue
+		}
+
+		response.Results = append(response.Results, BatchResult{
+			ID:     knowledge.ID,
+			Status: "created",
+			Title:  knowledge.Title,
+		})
+		response.Succeeded++
+
+		if !outputJSON {
+			fmt.Printf("Created: %s - %s\n", knowledge.ID, knowledge.Title)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading input: %w", err)
+	}
+
+	if response.Total == 0 {
+		return fmt.Errorf("no items provided")
+	}
+
+	// Output final summary
+	if outputJSON {
+		output, _ := json.MarshalIndent(response, "", "  ")
+		fmt.Println(string(output))
+	} else {
+		fmt.Printf("\nBatch complete: %d succeeded, %d failed out of %d total\n",
+			response.Succeeded, response.Failed, response.Total)
+	}
+
+	if response.Failed > 0 {
+		return fmt.Errorf("batch completed with %d failures", response.Failed)
+	}
+
+	return nil
 }
